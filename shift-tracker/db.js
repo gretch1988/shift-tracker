@@ -17,7 +17,7 @@ function load() {
   try {
     return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
   } catch (e) {
-    console.error('[db] Не удалось прочитать файл данных, создаю новый:', e.message);
+    console.error('[db] Could not read data file, creating a new one:', e.message);
     return { employees: [], shifts: [], nextEmployeeId: 1, nextShiftId: 1 };
   }
 }
@@ -41,13 +41,14 @@ const employees = {
     const pool = activeOnly ? state.employees.filter((e) => e.active) : state.employees;
     return pool.find((e) => bcrypt.compareSync(String(pin), e.pin_hash)) || null;
   },
-  insert({ full_name, pin_hash, role, active = true }) {
+  insert({ full_name, pin_hash, role, active = true, hourly_rate = 0 }) {
     const emp = {
       id: state.nextEmployeeId++,
       full_name,
       pin_hash,
       role,
       active: !!active,
+      hourly_rate: Number(hourly_rate) || 0,
       created_at: new Date().toISOString(),
     };
     state.employees.push(emp);
@@ -93,6 +94,8 @@ const shifts = {
       end_at: data.end_at || null,
       break_minutes: data.break_minutes ?? null,
       worked_minutes: data.worked_minutes ?? null,
+      hourly_rate_snapshot: data.hourly_rate_snapshot ?? null,
+      earned_amount: data.earned_amount ?? null,
       status: data.status || 'open',
       edited_by_admin: !!data.edited_by_admin,
       created_at: new Date().toISOString(),
@@ -120,11 +123,11 @@ const shifts = {
 
 // Seed first admin account if none exists yet
 if (!state.employees.some((e) => e.role === 'admin')) {
-  const adminName = process.env.ADMIN_NAME || 'Владелец';
+  const adminName = process.env.ADMIN_NAME || 'Owner';
   const adminPin = process.env.ADMIN_PIN || '9999';
   employees.insert({ full_name: adminName, pin_hash: bcrypt.hashSync(String(adminPin), 10), role: 'admin', active: true });
-  console.log(`[seed] Создан администратор "${adminName}" с ПИН-кодом по умолчанию: ${adminPin}`);
-  console.log('[seed] ВАЖНО: смените этот ПИН-код после первого входа в админ-панели!');
+  console.log(`[seed] Created admin "${adminName}" with default PIN: ${adminPin}`);
+  console.log('[seed] IMPORTANT: change this PIN after your first login to the admin panel!');
 }
 
 module.exports = { employees, shifts };
