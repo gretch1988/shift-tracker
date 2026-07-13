@@ -1,4 +1,4 @@
-const CACHE_NAME = 'shift-tracker-v1';
+const CACHE_NAME = 'shift-tracker-v2';
 const ASSETS = [
   '/index.html',
   '/admin.html',
@@ -24,14 +24,32 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Network-first for API calls, cache-first for static app shell
+// Network-first everywhere: always try to fetch the latest version from the
+// server first, and only fall back to the cached copy if the device is
+// offline. This keeps the kiosk in sync with whatever is actually deployed,
+// instead of getting stuck showing an old cached version forever.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(fetch(event.request).catch(() => new Response(JSON.stringify({ error: 'Нет соединения с сервером' }), { status: 503, headers: { 'Content-Type': 'application/json' } })));
+    event.respondWith(
+      fetch(event.request).catch(
+        () => new Response(JSON.stringify({ error: 'No connection to the server' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+    );
     return;
   }
+
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
