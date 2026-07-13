@@ -124,7 +124,7 @@ app.post('/api/pin/lookup', (req, res) => {
 // ---------- Shift start/end (employee, PIN-authenticated per request) ----------
 
 app.post('/api/shifts/start', (req, res) => {
-  const { pin, backdate_minutes, checklist } = req.body || {};
+  const { pin, backdate_minutes } = req.body || {};
   const employee = Employees.findByPin(pin);
   if (!employee) return res.status(404).json({ error: 'Incorrect PIN' });
   if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts" });
@@ -132,10 +132,9 @@ app.post('/api/shifts/start', (req, res) => {
   const openShift = Shifts.findOpenByEmployee(employee.id);
   if (openShift) return res.status(409).json({ error: 'You already have an open shift' });
 
-  const position = Positions.getById(employee.position_id);
-  const check = verifyChecklist(position ? position.opening_items : [], checklist);
-  if (!check.ok) return res.status(400).json({ error: check.error });
-
+  // The shift starts the instant the button is pressed — the employee is
+  // already on the clock. Any start-of-shift checklist for their position is
+  // completed as a follow-up step and does not delay the clock.
   let backdateMin = Number(backdate_minutes) || 0;
   if (backdateMin < 0) backdateMin = 0;
   if (backdateMin > MAX_BACKDATE_MINUTES) backdateMin = MAX_BACKDATE_MINUTES;
@@ -145,9 +144,26 @@ app.post('/api/shifts/start', (req, res) => {
     employee_id: employee.id,
     start_at: startAt,
     status: 'open',
-    opening_checklist: check.checklist,
   });
 
+  res.json({ employee: publicEmployee(employee), shift: publicShift(shift) });
+});
+
+// Submitted as a follow-up right after the shift has already started.
+app.post('/api/shifts/checklist/opening', (req, res) => {
+  const { pin, checklist } = req.body || {};
+  const employee = Employees.findByPin(pin);
+  if (!employee) return res.status(404).json({ error: 'Incorrect PIN' });
+  if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts" });
+
+  const openShift = Shifts.findOpenByEmployee(employee.id);
+  if (!openShift) return res.status(409).json({ error: 'No open shift' });
+
+  const position = Positions.getById(employee.position_id);
+  const check = verifyChecklist(position ? position.opening_items : [], checklist);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+
+  const shift = Shifts.update(openShift.id, { opening_checklist: check.checklist });
   res.json({ employee: publicEmployee(employee), shift: publicShift(shift) });
 });
 

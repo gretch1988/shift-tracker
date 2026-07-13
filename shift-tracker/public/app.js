@@ -152,9 +152,8 @@ async function submitPin() {
 // ---------- Employee home ----------
 
 function renderHome() {
-  const { employee, open_shift, position } = state.data;
+  const { employee, open_shift } = state.data;
   const isOpen = !!open_shift;
-  const openingItems = position ? position.opening_items : [];
 
   app.innerHTML = `
     <div class="card">
@@ -167,7 +166,6 @@ function renderHome() {
         isOpen
           ? `<button class="btn btn-danger" id="endBtn">End Shift</button>`
           : `
-            ${openingItems.length ? checklistHtml(openingItems, state.openChecked, 'open') : ''}
             <div class="field" style="text-align:left;">
               <label>Arrived earlier and forgot to clock in? Minutes ago:</label>
               <input type="number" id="backdateInput" min="0" max="360" value="${state.backdate || 0}" />
@@ -182,8 +180,6 @@ function renderHome() {
 
   document.getElementById('backBtn').addEventListener('click', goHome);
   document.getElementById('historyBtn').addEventListener('click', showHistory);
-
-  if (openingItems.length) bindChecklist('open', state.openChecked);
 
   const startBtn = document.getElementById('startBtn');
   if (startBtn) startBtn.addEventListener('click', doStart);
@@ -201,25 +197,23 @@ function renderHome() {
 }
 
 async function doStart() {
-  const { position } = state.data;
-  const openingItems = position ? position.opening_items : [];
-  if (openingItems.length && state.openChecked.some((c) => !c)) {
-    state.msg = 'Please check off every item on the checklist before starting your shift.';
-    state.msgType = 'error';
-    render();
-    return;
-  }
-
-  const checklist = openingItems.length
-    ? openingItems.map((text, i) => ({ text, checked: state.openChecked[i] }))
-    : undefined;
-
+  // The shift starts immediately — the employee is already on the clock.
+  // Any opening checklist for their position is filled out right after,
+  // as a separate step, so it never delays the start time.
   try {
-    const result = await api('/api/shifts/start', { pin: state.pin, backdate_minutes: state.backdate || 0, checklist });
+    const result = await api('/api/shifts/start', { pin: state.pin, backdate_minutes: state.backdate || 0 });
     state.data.open_shift = result.shift;
     state.backdate = 0;
-    state.msg = 'Shift started. Have a great shift!';
-    state.msgType = 'success';
+
+    const { position } = state.data;
+    const openingItems = position ? position.opening_items : [];
+    if (openingItems.length) {
+      state.screen = 'openingChecklist';
+      state.msg = '';
+    } else {
+      state.msg = 'Shift started. Have a great shift!';
+      state.msgType = 'success';
+    }
     render();
     resetInactivityTimer();
   } catch (e) {
@@ -227,6 +221,50 @@ async function doStart() {
     state.msgType = 'error';
     render();
   }
+}
+
+// ---------- Opening checklist (shown right after the shift has started) ----------
+
+function renderOpeningChecklist() {
+  const { position } = state.data;
+  const openingItems = position ? position.opening_items : [];
+
+  app.innerHTML = `
+    <div class="card">
+      <h1>Shift Started</h1>
+      <p style="color: var(--muted); font-size: 14px;">You're on the clock. Please finish the opening checklist:</p>
+      ${checklistHtml(openingItems, state.openChecked, 'open')}
+      <div class="msg ${state.msgType}">${state.msg}</div>
+      <button class="btn btn-primary" id="confirmOpen">Confirm Checklist</button>
+      <button class="btn btn-ghost" id="laterOpen">I'll finish this later</button>
+    </div>
+  `;
+
+  bindChecklist('open', state.openChecked);
+
+  document.getElementById('laterOpen').addEventListener('click', goHome);
+
+  document.getElementById('confirmOpen').addEventListener('click', async () => {
+    if (state.openChecked.some((c) => !c)) {
+      state.msg = 'Please check off every item before confirming.';
+      state.msgType = 'error';
+      render();
+      return;
+    }
+    const checklist = openingItems.map((text, i) => ({ text, checked: state.openChecked[i] }));
+    try {
+      await api('/api/shifts/checklist/opening', { pin: state.pin, checklist });
+      state.screen = 'home';
+      state.msg = 'Shift started. Have a great shift!';
+      state.msgType = 'success';
+      render();
+      resetInactivityTimer();
+    } catch (e) {
+      state.msg = e.message;
+      state.msgType = 'error';
+      render();
+    }
+  });
 }
 
 // ---------- Break input before ending shift ----------
@@ -349,6 +387,7 @@ function renderHistory() {
 function render() {
   if (state.screen === 'pin') renderPin();
   else if (state.screen === 'home') renderHome();
+  else if (state.screen === 'openingChecklist') renderOpeningChecklist();
   else if (state.screen === 'break') renderBreak();
   else if (state.screen === 'summary') renderSummary();
   else if (state.screen === 'history') renderHistory();
