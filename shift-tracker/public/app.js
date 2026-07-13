@@ -1,7 +1,7 @@
 const API = '';
 const app = document.getElementById('app');
 
-let state = { screen: 'pin', pin: '', data: null, msg: '', msgType: '' };
+let state = { screen: 'pin', pin: '', data: null, msg: '', msgType: '', backdate: 0 };
 let inactivityTimer = null;
 
 function resetInactivityTimer() {
@@ -9,12 +9,12 @@ function resetInactivityTimer() {
   if (state.screen !== 'pin') {
     inactivityTimer = setTimeout(() => {
       goHome();
-    }, 45000);
+    }, 60000);
   }
 }
 
 function goHome() {
-  state = { screen: 'pin', pin: '', data: null, msg: '', msgType: '' };
+  state = { screen: 'pin', pin: '', data: null, msg: '', msgType: '', backdate: 0 };
   render();
 }
 
@@ -25,21 +25,26 @@ async function api(path, body) {
     body: JSON.stringify(body || {}),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || 'Ошибка сервера');
+  if (!res.ok) throw new Error(json.error || 'Server error');
   return json;
 }
 
 function fmtTime(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
-  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString('en-US', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtDuration(minutes) {
   if (minutes === null || minutes === undefined) return '—';
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
-  return `${h} ч ${m} мин`;
+  return `${h}h ${m}m`;
+}
+
+function fmtMoney(amount) {
+  if (amount === null || amount === undefined) return '—';
+  return `$${Number(amount).toFixed(2)}`;
 }
 
 // ---------- PIN screen ----------
@@ -52,20 +57,20 @@ function renderPin() {
   app.innerHTML = `
     <div class="card">
       <div class="clock" id="clock"></div>
-      <h1>Введите ПИН-код</h1>
+      <h1>Enter your PIN</h1>
       <div class="pin-display">${dots}</div>
       <div class="msg ${state.msgType}">${state.msg}</div>
       <div class="pin-pad">
         ${[1,2,3,4,5,6,7,8,9].map(n => `<button data-key="${n}">${n}</button>`).join('')}
-        <button data-key="clear">Очистить</button>
+        <button data-key="clear">Clear</button>
         <button data-key="0">0</button>
         <button data-key="back">⌫</button>
       </div>
-      <div class="link-row"><a href="/admin.html">Панель администратора →</a></div>
+      <div class="link-row"><a href="/admin.html">Admin panel →</a></div>
     </div>
   `;
 
-  document.getElementById('clock').textContent = new Date().toLocaleString('ru-RU');
+  document.getElementById('clock').textContent = new Date().toLocaleString('en-US');
 
   app.querySelectorAll('.pin-pad button').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -89,7 +94,7 @@ async function submitPin() {
   try {
     const result = await api('/api/pin/lookup', { pin });
     if (result.role === 'admin') {
-      state.msg = `Это ПИН администратора. Откройте панель администратора.`;
+      state.msg = `That's an admin PIN. Please open the admin panel instead.`;
       state.msgType = 'success';
       state.pin = '';
       render();
@@ -119,16 +124,22 @@ function renderHome() {
     <div class="card">
       <div class="employee-name">${employee.full_name}</div>
       <div class="status-badge ${isOpen ? 'open' : 'idle'}">
-        ${isOpen ? `Смена открыта с ${fmtTime(open_shift.start_at)}` : 'Смена не открыта'}
+        ${isOpen ? `Shift open since ${fmtTime(open_shift.start_at)}` : 'No shift open'}
       </div>
       <div class="msg ${state.msgType}">${state.msg}</div>
       ${
         isOpen
-          ? `<button class="btn btn-danger" id="endBtn">Завершить смену</button>`
-          : `<button class="btn btn-success" id="startBtn">Начать смену</button>`
+          ? `<button class="btn btn-danger" id="endBtn">End Shift</button>`
+          : `
+            <div class="field" style="text-align:left;">
+              <label>Arrived earlier and forgot to clock in? Minutes ago:</label>
+              <input type="number" id="backdateInput" min="0" max="360" value="${state.backdate || 0}" />
+            </div>
+            <button class="btn btn-success" id="startBtn">Start Shift</button>
+          `
       }
-      <button class="btn btn-ghost" id="historyBtn">Мои смены</button>
-      <button class="btn btn-ghost" id="backBtn">Выйти</button>
+      <button class="btn btn-ghost" id="historyBtn">My Shifts</button>
+      <button class="btn btn-ghost" id="backBtn">Log Out</button>
     </div>
   `;
 
@@ -137,6 +148,11 @@ function renderHome() {
 
   const startBtn = document.getElementById('startBtn');
   if (startBtn) startBtn.addEventListener('click', doStart);
+
+  const backdateInput = document.getElementById('backdateInput');
+  if (backdateInput) backdateInput.addEventListener('input', () => {
+    state.backdate = Number(backdateInput.value) || 0;
+  });
 
   const endBtn = document.getElementById('endBtn');
   if (endBtn) endBtn.addEventListener('click', () => {
@@ -147,13 +163,13 @@ function renderHome() {
 
 async function doStart() {
   try {
-    const result = await api('/api/shifts/start', { pin: state.pin });
+    const result = await api('/api/shifts/start', { pin: state.pin, backdate_minutes: state.backdate || 0 });
     state.data.open_shift = result.shift;
-    state.msg = 'Смена начата. Хорошей работы!';
+    state.backdate = 0;
+    state.msg = 'Shift started. Have a great shift!';
     state.msgType = 'success';
     render();
     resetInactivityTimer();
-    setTimeout(goHome, 2500);
   } catch (e) {
     state.msg = e.message;
     state.msgType = 'error';
@@ -166,14 +182,14 @@ async function doStart() {
 function renderBreak() {
   app.innerHTML = `
     <div class="card">
-      <h1>Завершение смены</h1>
+      <h1>End Shift</h1>
       <div class="field">
-        <label>Сколько минут длился перерыв?</label>
+        <label>How many minutes was your break?</label>
         <input type="number" id="breakInput" inputmode="numeric" min="0" placeholder="0" autofocus />
       </div>
       <div class="msg ${state.msgType}">${state.msg}</div>
-      <button class="btn btn-danger" id="confirmEnd">Завершить смену</button>
-      <button class="btn btn-ghost" id="cancelEnd">Отмена</button>
+      <button class="btn btn-danger" id="confirmEnd">End Shift</button>
+      <button class="btn btn-ghost" id="cancelEnd">Cancel</button>
     </div>
   `;
 
@@ -190,7 +206,7 @@ function renderBreak() {
       state.screen = 'summary';
       state.data.lastShift = result.shift;
       render();
-      setTimeout(goHome, 4000);
+      resetInactivityTimer();
     } catch (e) {
       state.msg = e.message;
       state.msgType = 'error';
@@ -201,14 +217,16 @@ function renderBreak() {
 
 function renderSummary() {
   const s = state.data.lastShift;
+  const hasRate = s.hourly_rate_snapshot && s.hourly_rate_snapshot > 0;
   app.innerHTML = `
     <div class="card">
-      <h1>Смена завершена</h1>
-      <p>Начало: ${fmtTime(s.start_at)}</p>
-      <p>Конец: ${fmtTime(s.end_at)}</p>
-      <p>Перерыв: ${s.break_minutes} мин</p>
-      <p class="employee-name">Отработано: ${fmtDuration(s.worked_minutes)}</p>
-      <button class="btn btn-primary" id="okBtn">Готово</button>
+      <h1>Shift Complete</h1>
+      <p>Started: ${fmtTime(s.start_at)}</p>
+      <p>Ended: ${fmtTime(s.end_at)}</p>
+      <p>Break: ${s.break_minutes} min</p>
+      <p class="employee-name">Worked: ${fmtDuration(s.worked_minutes)}</p>
+      ${hasRate ? `<p class="employee-name">Earned: ${fmtMoney(s.earned_amount)}</p>` : ''}
+      <button class="btn btn-primary" id="okBtn">Done</button>
     </div>
   `;
   document.getElementById('okBtn').addEventListener('click', goHome);
@@ -233,19 +251,22 @@ async function showHistory() {
 function renderHistory() {
   const shifts = state.data.history || [];
   const items = shifts.length
-    ? shifts.map((s) => `
+    ? shifts.map((s) => {
+        const hasRate = s.hourly_rate_snapshot && s.hourly_rate_snapshot > 0;
+        return `
       <div class="history-item">
-        <div class="date">${fmtTime(s.start_at)} → ${s.end_at ? fmtTime(s.end_at) : 'открыта'}</div>
-        <div>Перерыв: ${s.break_minutes ?? 0} мин · <span class="worked">${fmtDuration(s.worked_minutes)}</span></div>
+        <div class="date">${fmtTime(s.start_at)} → ${s.end_at ? fmtTime(s.end_at) : 'open'}</div>
+        <div>Break: ${s.break_minutes ?? 0} min · <span class="worked">${fmtDuration(s.worked_minutes)}</span>${hasRate ? ` · <span class="worked">${fmtMoney(s.earned_amount)}</span>` : ''}</div>
       </div>
-    `).join('')
-    : '<p>Смен пока нет.</p>';
+    `;
+      }).join('')
+    : '<p>No shifts yet.</p>';
 
   app.innerHTML = `
     <div class="card">
-      <h1>Мои смены</h1>
+      <h1>My Shifts</h1>
       <div class="history">${items}</div>
-      <button class="btn btn-ghost" id="backBtn">Назад</button>
+      <button class="btn btn-ghost" id="backBtn">Back</button>
     </div>
   `;
   document.getElementById('backBtn').addEventListener('click', () => {
@@ -267,7 +288,7 @@ function render() {
 render();
 setInterval(() => {
   const clockEl = document.getElementById('clock');
-  if (clockEl) clockEl.textContent = new Date().toLocaleString('ru-RU');
+  if (clockEl) clockEl.textContent = new Date().toLocaleString('en-US');
 }, 1000);
 
 ['click', 'touchstart'].forEach((evt) => {

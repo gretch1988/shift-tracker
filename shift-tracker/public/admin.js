@@ -16,7 +16,7 @@ async function api(path, { method = 'GET', body, auth = true } = {}) {
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 401) logout();
-    throw new Error(json.error || 'Ошибка сервера');
+    throw new Error(json.error || 'Server error');
   }
   return json;
 }
@@ -36,11 +36,15 @@ function fmtDT(iso) {
 }
 function fmtDisplay(iso) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleString('en-US', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 function fmtDuration(min) {
   if (min === null || min === undefined) return '—';
-  return `${Math.floor(min / 60)}ч ${min % 60}м`;
+  return `${Math.floor(min / 60)}h ${min % 60}m`;
+}
+function fmtMoney(amount) {
+  if (amount === null || amount === undefined) return '—';
+  return `$${Number(amount).toFixed(2)}`;
 }
 
 // ---------- Login ----------
@@ -48,14 +52,14 @@ function fmtDuration(min) {
 function renderLogin() {
   app.innerHTML = `
     <div class="card" style="margin: 10vh auto;">
-      <h1>Панель администратора</h1>
+      <h1>Admin Panel</h1>
       <div class="field">
-        <label>ПИН-код администратора</label>
+        <label>Admin PIN</label>
         <input type="password" id="adminPin" inputmode="numeric" autofocus />
       </div>
       <div class="msg ${msg.type}">${msg.text}</div>
-      <button class="btn btn-primary" id="loginBtn">Войти</button>
-      <div class="link-row"><a href="/index.html">← Вернуться к киоску</a></div>
+      <button class="btn btn-primary" id="loginBtn">Log In</button>
+      <div class="link-row"><a href="/index.html">← Back to kiosk</a></div>
     </div>
   `;
   const pinInput = document.getElementById('adminPin');
@@ -85,12 +89,12 @@ async function renderDashboard() {
   app.innerHTML = `
     <div class="admin-card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
-        <h2>Учёт смен — ${adminName}</h2>
-        <button class="btn btn-ghost btn-sm" id="logoutBtn">Выйти</button>
+        <h2>Shift Tracker — ${adminName}</h2>
+        <button class="btn btn-ghost btn-sm" id="logoutBtn">Log Out</button>
       </div>
       <div class="tabs">
-        <button class="btn btn-sm ${tab === 'shifts' ? 'active' : 'btn-ghost'}" data-tab="shifts">Смены</button>
-        <button class="btn btn-sm ${tab === 'employees' ? 'active' : 'btn-ghost'}" data-tab="employees">Сотрудники</button>
+        <button class="btn btn-sm ${tab === 'shifts' ? 'active' : 'btn-ghost'}" data-tab="shifts">Shifts</button>
+        <button class="btn btn-sm ${tab === 'employees' ? 'active' : 'btn-ghost'}" data-tab="employees">Employees</button>
       </div>
       <div id="tabContent"></div>
     </div>
@@ -121,7 +125,7 @@ async function loadShifts() {
 
 async function renderShiftsTab() {
   const el = document.getElementById('tabContent');
-  el.innerHTML = `<p>Загрузка…</p>`;
+  el.innerHTML = `<p>Loading…</p>`;
   try {
     await loadShifts();
   } catch (e) {
@@ -134,28 +138,32 @@ async function renderShiftsTab() {
     .map((e) => `<option value="${e.id}" ${filters.employee_id == e.id ? 'selected' : ''}>${e.full_name}</option>`)
     .join('');
 
+  const totalEarned = shiftsCache.reduce((sum, s) => sum + (s.earned_amount || 0), 0);
+  const totalMinutes = shiftsCache.reduce((sum, s) => sum + (s.worked_minutes || 0), 0);
+
   el.innerHTML = `
     <div class="toolbar">
-      <div class="field"><label>Сотрудник</label>
-        <select id="fEmployee"><option value="">Все</option>${empOptions}</select>
+      <div class="field"><label>Employee</label>
+        <select id="fEmployee"><option value="">All</option>${empOptions}</select>
       </div>
-      <div class="field"><label>С даты</label><input type="date" id="fFrom" value="${filters.from}" /></div>
-      <div class="field"><label>По дату</label><input type="date" id="fTo" value="${filters.to}" /></div>
-      <div class="field"><label>Статус</label>
+      <div class="field"><label>From</label><input type="date" id="fFrom" value="${filters.from}" /></div>
+      <div class="field"><label>To</label><input type="date" id="fTo" value="${filters.to}" /></div>
+      <div class="field"><label>Status</label>
         <select id="fStatus">
-          <option value="" ${filters.status===''?'selected':''}>Все</option>
-          <option value="open" ${filters.status==='open'?'selected':''}>Открытые</option>
-          <option value="closed" ${filters.status==='closed'?'selected':''}>Закрытые</option>
+          <option value="" ${filters.status===''?'selected':''}>All</option>
+          <option value="open" ${filters.status==='open'?'selected':''}>Open</option>
+          <option value="closed" ${filters.status==='closed'?'selected':''}>Closed</option>
         </select>
       </div>
-      <button class="btn btn-primary btn-sm" id="applyFilters">Применить</button>
-      <button class="btn btn-success btn-sm" id="exportBtn">Экспорт в Excel</button>
-      <button class="btn btn-ghost btn-sm" id="addShiftBtn">+ Добавить смену</button>
+      <button class="btn btn-primary btn-sm" id="applyFilters">Apply</button>
+      <button class="btn btn-success btn-sm" id="exportBtn">Export to Excel</button>
+      <button class="btn btn-ghost btn-sm" id="addShiftBtn">+ Add Shift</button>
     </div>
     <div class="msg ${msg.type}">${msg.text}</div>
+    <p style="color: var(--muted); font-size: 14px;">Totals for filtered results: ${fmtDuration(totalMinutes)} worked · ${fmtMoney(totalEarned)} earned</p>
     <table>
       <thead><tr>
-        <th>Сотрудник</th><th>Начало</th><th>Конец</th><th>Перерыв</th><th>Отработано</th><th>Статус</th><th>Изменено</th><th></th>
+        <th>Employee</th><th>Start</th><th>End</th><th>Break</th><th>Worked</th><th>Rate</th><th>Earned</th><th>Status</th><th>Edited</th><th></th>
       </tr></thead>
       <tbody id="shiftsBody"></tbody>
     </table>
@@ -184,8 +192,10 @@ function renderShiftsRows() {
       <td>${fmtDisplay(s.end_at)}</td>
       <td>${s.break_minutes ?? '—'}</td>
       <td>${fmtDuration(s.worked_minutes)}</td>
-      <td>${s.status === 'open' ? 'Открыта' : 'Закрыта'}</td>
-      <td>${s.edited_by_admin ? 'да' : ''}</td>
+      <td>${s.hourly_rate_snapshot ? '$' + s.hourly_rate_snapshot : '—'}</td>
+      <td>${fmtMoney(s.earned_amount)}</td>
+      <td>${s.status === 'open' ? 'Open' : 'Closed'}</td>
+      <td>${s.edited_by_admin ? 'yes' : ''}</td>
       <td>
         <button class="btn-sm btn-ghost" data-edit="${s.id}">✎</button>
         <button class="btn-sm btn-danger" data-del="${s.id}">✕</button>
@@ -211,14 +221,15 @@ function openShiftForm(shift) {
   const wrap = document.createElement('div');
   wrap.className = 'admin-card';
   wrap.innerHTML = `
-    <h3>${isNew ? 'Новая смена' : 'Редактировать смену'}</h3>
-    ${isNew ? `<div class="field"><label>Сотрудник</label><select id="formEmployee">${empOptions}</select></div>` : ''}
-    <div class="field"><label>Начало</label><input type="datetime-local" id="formStart" value="${shift ? fmtDT(shift.start_at) : ''}" /></div>
-    <div class="field"><label>Конец (оставьте пустым, если смена ещё открыта)</label><input type="datetime-local" id="formEnd" value="${shift ? fmtDT(shift.end_at) : ''}" /></div>
-    <div class="field"><label>Перерыв (мин)</label><input type="number" id="formBreak" value="${shift ? (shift.break_minutes ?? 0) : 0}" /></div>
+    <h3>${isNew ? 'New Shift' : 'Edit Shift'}</h3>
+    ${isNew ? `<div class="field"><label>Employee</label><select id="formEmployee">${empOptions}</select></div>` : ''}
+    <div class="field"><label>Start</label><input type="datetime-local" id="formStart" value="${shift ? fmtDT(shift.start_at) : ''}" /></div>
+    <div class="field"><label>End (leave blank if shift is still open)</label><input type="datetime-local" id="formEnd" value="${shift ? fmtDT(shift.end_at) : ''}" /></div>
+    <div class="field"><label>Break (min)</label><input type="number" id="formBreak" value="${shift ? (shift.break_minutes ?? 0) : 0}" /></div>
+    <div class="field"><label>Hourly rate ($)</label><input type="number" step="0.01" id="formRate" value="${shift ? (shift.hourly_rate_snapshot ?? 0) : 0}" /></div>
     <div class="msg" id="formMsg"></div>
-    <button class="btn btn-primary" id="formSave">Сохранить</button>
-    <button class="btn btn-ghost" id="formCancel">Отмена</button>
+    <button class="btn btn-primary" id="formSave">Save</button>
+    <button class="btn btn-ghost" id="formCancel">Cancel</button>
   `;
   document.getElementById('tabContent').prepend(wrap);
   wrap.scrollIntoView({ behavior: 'smooth' });
@@ -228,8 +239,9 @@ function openShiftForm(shift) {
     const start_at = document.getElementById('formStart').value;
     const end_at = document.getElementById('formEnd').value;
     const break_minutes = Number(document.getElementById('formBreak').value || 0);
+    const hourly_rate = Number(document.getElementById('formRate').value || 0);
     if (!start_at) {
-      document.getElementById('formMsg').textContent = 'Укажите время начала';
+      document.getElementById('formMsg').textContent = 'Please provide a start time';
       document.getElementById('formMsg').className = 'msg error';
       return;
     }
@@ -238,15 +250,15 @@ function openShiftForm(shift) {
         const employee_id = document.getElementById('formEmployee').value;
         await api('/api/admin/shifts', { method: 'POST', body: {
           employee_id, start_at: new Date(start_at).toISOString(),
-          end_at: end_at ? new Date(end_at).toISOString() : null, break_minutes,
+          end_at: end_at ? new Date(end_at).toISOString() : null, break_minutes, hourly_rate,
         }});
       } else {
         await api(`/api/admin/shifts/${shift.id}`, { method: 'PUT', body: {
           start_at: new Date(start_at).toISOString(),
-          end_at: end_at ? new Date(end_at).toISOString() : null, break_minutes,
+          end_at: end_at ? new Date(end_at).toISOString() : null, break_minutes, hourly_rate,
         }});
       }
-      msg = { text: 'Сохранено', type: 'success' };
+      msg = { text: 'Saved', type: 'success' };
       renderShiftsTab();
     } catch (e) {
       document.getElementById('formMsg').textContent = e.message;
@@ -256,10 +268,10 @@ function openShiftForm(shift) {
 }
 
 async function deleteShift(id) {
-  if (!confirm('Удалить эту смену?')) return;
+  if (!confirm('Delete this shift?')) return;
   try {
     await api(`/api/admin/shifts/${id}`, { method: 'DELETE' });
-    msg = { text: 'Смена удалена', type: 'success' };
+    msg = { text: 'Shift deleted', type: 'success' };
     renderShiftsTab();
   } catch (e) {
     msg = { text: e.message, type: 'error' };
@@ -269,19 +281,27 @@ async function deleteShift(id) {
 
 function exportToExcel() {
   const rows = shiftsCache.map((s) => ({
-    'Сотрудник': s.employee_name,
-    'Начало': fmtDisplay(s.start_at),
-    'Конец': fmtDisplay(s.end_at),
-    'Перерыв (мин)': s.break_minutes ?? '',
-    'Отработано (мин)': s.worked_minutes ?? '',
-    'Отработано': fmtDuration(s.worked_minutes),
-    'Статус': s.status === 'open' ? 'Открыта' : 'Закрыта',
+    'Employee': s.employee_name,
+    'Start': fmtDisplay(s.start_at),
+    'End': fmtDisplay(s.end_at),
+    'Break (min)': s.break_minutes ?? '',
+    'Worked (min)': s.worked_minutes ?? '',
+    'Worked': fmtDuration(s.worked_minutes),
+    'Rate ($/hr)': s.hourly_rate_snapshot ?? '',
+    'Earned ($)': s.earned_amount ?? '',
+    'Status': s.status === 'open' ? 'Open' : 'Closed',
   }));
+  const totalEarned = shiftsCache.reduce((sum, s) => sum + (s.earned_amount || 0), 0);
+  const totalMinutes = shiftsCache.reduce((sum, s) => sum + (s.worked_minutes || 0), 0);
+  rows.push({
+    'Employee': 'TOTAL', 'Start': '', 'End': '', 'Break (min)': '', 'Worked (min)': totalMinutes,
+    'Worked': fmtDuration(totalMinutes), 'Rate ($/hr)': '', 'Earned ($)': Math.round(totalEarned * 100) / 100, 'Status': '',
+  });
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Смены');
+  XLSX.utils.book_append_sheet(wb, ws, 'Shifts');
   const date = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, `smeny_${date}.xlsx`);
+  XLSX.writeFile(wb, `shifts_${date}.xlsx`);
 }
 
 // ---------- Employees tab ----------
@@ -290,11 +310,11 @@ function renderEmployeesTab() {
   const el = document.getElementById('tabContent');
   el.innerHTML = `
     <div class="toolbar">
-      <button class="btn btn-primary btn-sm" id="addEmpBtn">+ Добавить сотрудника</button>
+      <button class="btn btn-primary btn-sm" id="addEmpBtn">+ Add Employee</button>
     </div>
     <div class="msg ${msg.type}">${msg.text}</div>
     <table>
-      <thead><tr><th>Имя</th><th>Роль</th><th>Активен</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Role</th><th>Rate</th><th>Active</th><th></th></tr></thead>
       <tbody id="empBody"></tbody>
     </table>
   `;
@@ -302,11 +322,12 @@ function renderEmployeesTab() {
   body.innerHTML = employeesCache.map((e) => `
     <tr>
       <td>${e.full_name}</td>
-      <td>${e.role === 'admin' ? 'Администратор' : 'Сотрудник'}</td>
-      <td>${e.active ? 'да' : 'нет'}</td>
+      <td>${e.role === 'admin' ? 'Admin' : 'Employee'}</td>
+      <td>${e.hourly_rate ? '$' + e.hourly_rate + '/hr' : '—'}</td>
+      <td>${e.active ? 'yes' : 'no'}</td>
       <td>
         <button class="btn-sm btn-ghost" data-edit-emp="${e.id}">✎</button>
-        ${e.role === 'employee' ? `<button class="btn-sm ${e.active ? 'btn-danger' : 'btn-success'}" data-toggle="${e.id}">${e.active ? 'Отключить' : 'Включить'}</button>` : ''}
+        ${e.role === 'employee' ? `<button class="btn-sm ${e.active ? 'btn-danger' : 'btn-success'}" data-toggle="${e.id}">${e.active ? 'Deactivate' : 'Activate'}</button>` : ''}
       </td>
     </tr>
   `).join('');
@@ -335,15 +356,16 @@ function openEmployeeForm(employee) {
   const wrap = document.createElement('div');
   wrap.className = 'admin-card';
   wrap.innerHTML = `
-    <h3>${isNew ? 'Новый сотрудник' : 'Редактировать сотрудника'}</h3>
-    <div class="field"><label>Имя</label><input id="formName" value="${employee ? employee.full_name : ''}" /></div>
-    <div class="field"><label>${isNew ? 'ПИН-код (4–6 цифр)' : 'Новый ПИН-код (оставьте пустым, если не меняете)'}</label><input id="formPin" inputmode="numeric" /></div>
-    ${isNew ? `<div class="field"><label>Роль</label>
-      <select id="formRole"><option value="employee">Сотрудник</option><option value="admin">Администратор</option></select>
+    <h3>${isNew ? 'New Employee' : 'Edit Employee'}</h3>
+    <div class="field"><label>Name</label><input id="formName" value="${employee ? employee.full_name : ''}" /></div>
+    <div class="field"><label>${isNew ? 'PIN (4–6 digits)' : 'New PIN (leave blank to keep current)'}</label><input id="formPin" inputmode="numeric" /></div>
+    <div class="field"><label>Hourly rate ($)</label><input type="number" step="0.01" id="formRateEmp" value="${employee ? (employee.hourly_rate ?? 0) : 0}" /></div>
+    ${isNew ? `<div class="field"><label>Role</label>
+      <select id="formRole"><option value="employee">Employee</option><option value="admin">Admin</option></select>
     </div>` : ''}
     <div class="msg" id="empFormMsg"></div>
-    <button class="btn btn-primary" id="empFormSave">Сохранить</button>
-    <button class="btn btn-ghost" id="empFormCancel">Отмена</button>
+    <button class="btn btn-primary" id="empFormSave">Save</button>
+    <button class="btn btn-ghost" id="empFormCancel">Cancel</button>
   `;
   document.getElementById('tabContent').prepend(wrap);
   wrap.scrollIntoView({ behavior: 'smooth' });
@@ -352,23 +374,24 @@ function openEmployeeForm(employee) {
   document.getElementById('empFormSave').addEventListener('click', async () => {
     const full_name = document.getElementById('formName').value.trim();
     const pin = document.getElementById('formPin').value.trim();
+    const hourly_rate = Number(document.getElementById('formRateEmp').value || 0);
     if (!full_name) {
-      document.getElementById('empFormMsg').textContent = 'Укажите имя';
+      document.getElementById('empFormMsg').textContent = 'Please provide a name';
       document.getElementById('empFormMsg').className = 'msg error';
       return;
     }
     try {
       if (isNew) {
         const role = document.getElementById('formRole').value;
-        if (!pin) throw new Error('Укажите ПИН-код');
-        await api('/api/admin/employees', { method: 'POST', body: { full_name, pin, role } });
+        if (!pin) throw new Error('Please provide a PIN');
+        await api('/api/admin/employees', { method: 'POST', body: { full_name, pin, role, hourly_rate } });
       } else {
-        const body = { full_name };
+        const body = { full_name, hourly_rate };
         if (pin) body.pin = pin;
         await api(`/api/admin/employees/${employee.id}`, { method: 'PUT', body });
       }
       employeesCache = await api('/api/admin/employees');
-      msg = { text: 'Сохранено', type: 'success' };
+      msg = { text: 'Saved', type: 'success' };
       renderEmployeesTab();
     } catch (e) {
       document.getElementById('empFormMsg').textContent = e.message;
