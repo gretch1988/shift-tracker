@@ -1,7 +1,18 @@
 const API = '';
 const app = document.getElementById('app');
 
-let state = { screen: 'pin', pin: '', data: null, msg: '', msgType: '', backdate: 0 };
+const initialState = () => ({
+  screen: 'pin',
+  pin: '',
+  data: null,
+  msg: '',
+  msgType: '',
+  backdate: 0,
+  openChecked: [],
+  closeChecked: [],
+});
+
+let state = initialState();
 let inactivityTimer = null;
 
 function resetInactivityTimer() {
@@ -14,7 +25,7 @@ function resetInactivityTimer() {
 }
 
 function goHome() {
-  state = { screen: 'pin', pin: '', data: null, msg: '', msgType: '', backdate: 0 };
+  state = initialState();
   render();
 }
 
@@ -45,6 +56,28 @@ function fmtDuration(minutes) {
 function fmtMoney(amount) {
   if (amount === null || amount === undefined) return '—';
   return `$${Number(amount).toFixed(2)}`;
+}
+
+function checklistHtml(items, checkedArr, idPrefix) {
+  return `
+    <div class="field" style="text-align:left;">
+      <label>Checklist — check off every item</label>
+      ${items.map((text, i) => `
+        <label class="checklist-item">
+          <input type="checkbox" data-checklist="${idPrefix}" data-index="${i}" ${checkedArr[i] ? 'checked' : ''} />
+          <span>${text}</span>
+        </label>
+      `).join('')}
+    </div>
+  `;
+}
+
+function bindChecklist(idPrefix, checkedArr) {
+  app.querySelectorAll(`[data-checklist="${idPrefix}"]`).forEach((cb) => {
+    cb.addEventListener('change', () => {
+      checkedArr[Number(cb.dataset.index)] = cb.checked;
+    });
+  });
 }
 
 // ---------- PIN screen ----------
@@ -104,6 +137,8 @@ async function submitPin() {
     state.data = result;
     state.pin = pin; // keep for start/end calls
     state.msg = '';
+    state.openChecked = result.position ? result.position.opening_items.map(() => false) : [];
+    state.closeChecked = result.position ? result.position.closing_items.map(() => false) : [];
     render();
     resetInactivityTimer();
   } catch (e) {
@@ -117,8 +152,9 @@ async function submitPin() {
 // ---------- Employee home ----------
 
 function renderHome() {
-  const { employee, open_shift } = state.data;
+  const { employee, open_shift, position } = state.data;
   const isOpen = !!open_shift;
+  const openingItems = position ? position.opening_items : [];
 
   app.innerHTML = `
     <div class="card">
@@ -131,6 +167,7 @@ function renderHome() {
         isOpen
           ? `<button class="btn btn-danger" id="endBtn">End Shift</button>`
           : `
+            ${openingItems.length ? checklistHtml(openingItems, state.openChecked, 'open') : ''}
             <div class="field" style="text-align:left;">
               <label>Arrived earlier and forgot to clock in? Minutes ago:</label>
               <input type="number" id="backdateInput" min="0" max="360" value="${state.backdate || 0}" />
@@ -145,6 +182,8 @@ function renderHome() {
 
   document.getElementById('backBtn').addEventListener('click', goHome);
   document.getElementById('historyBtn').addEventListener('click', showHistory);
+
+  if (openingItems.length) bindChecklist('open', state.openChecked);
 
   const startBtn = document.getElementById('startBtn');
   if (startBtn) startBtn.addEventListener('click', doStart);
@@ -162,8 +201,21 @@ function renderHome() {
 }
 
 async function doStart() {
+  const { position } = state.data;
+  const openingItems = position ? position.opening_items : [];
+  if (openingItems.length && state.openChecked.some((c) => !c)) {
+    state.msg = 'Please check off every item on the checklist before starting your shift.';
+    state.msgType = 'error';
+    render();
+    return;
+  }
+
+  const checklist = openingItems.length
+    ? openingItems.map((text, i) => ({ text, checked: state.openChecked[i] }))
+    : undefined;
+
   try {
-    const result = await api('/api/shifts/start', { pin: state.pin, backdate_minutes: state.backdate || 0 });
+    const result = await api('/api/shifts/start', { pin: state.pin, backdate_minutes: state.backdate || 0, checklist });
     state.data.open_shift = result.shift;
     state.backdate = 0;
     state.msg = 'Shift started. Have a great shift!';
@@ -180,9 +232,13 @@ async function doStart() {
 // ---------- Break input before ending shift ----------
 
 function renderBreak() {
+  const { position } = state.data;
+  const closingItems = position ? position.closing_items : [];
+
   app.innerHTML = `
     <div class="card">
       <h1>End Shift</h1>
+      ${closingItems.length ? checklistHtml(closingItems, state.closeChecked, 'close') : ''}
       <div class="field">
         <label>How many minutes was your break?</label>
         <input type="number" id="breakInput" inputmode="numeric" min="0" placeholder="0" autofocus />
@@ -193,16 +249,29 @@ function renderBreak() {
     </div>
   `;
 
+  if (closingItems.length) bindChecklist('close', state.closeChecked);
+
   document.getElementById('cancelEnd').addEventListener('click', () => {
     state.screen = 'home';
     render();
   });
 
   document.getElementById('confirmEnd').addEventListener('click', async () => {
+    if (closingItems.length && state.closeChecked.some((c) => !c)) {
+      state.msg = 'Please check off every item on the checklist before ending your shift.';
+      state.msgType = 'error';
+      render();
+      return;
+    }
+
     const val = document.getElementById('breakInput').value;
     const breakMinutes = Number(val || 0);
+    const checklist = closingItems.length
+      ? closingItems.map((text, i) => ({ text, checked: state.closeChecked[i] }))
+      : undefined;
+
     try {
-      const result = await api('/api/shifts/end', { pin: state.pin, break_minutes: breakMinutes });
+      const result = await api('/api/shifts/end', { pin: state.pin, break_minutes: breakMinutes, checklist });
       state.screen = 'summary';
       state.data.lastShift = result.shift;
       render();

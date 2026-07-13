@@ -143,3 +143,19 @@ h1 {
 
 .link-row { margin-top: 20px; font-size: 13px; }
 .link-row a { color: var(--muted); text-decoration: none; }
+
+.checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  cursor: pointer;
+}
+.checklist-item input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}

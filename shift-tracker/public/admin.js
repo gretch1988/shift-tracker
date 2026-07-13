@@ -6,6 +6,7 @@ let adminName = localStorage.getItem('admin_name') || '';
 let tab = 'shifts';
 let employeesCache = [];
 let shiftsCache = [];
+let positionsCache = [];
 let filters = { employee_id: '', from: '', to: '', status: '' };
 let msg = { text: '', type: '' };
 
@@ -95,6 +96,7 @@ async function renderDashboard() {
       <div class="tabs">
         <button class="btn btn-sm ${tab === 'shifts' ? 'active' : 'btn-ghost'}" data-tab="shifts">Shifts</button>
         <button class="btn btn-sm ${tab === 'employees' ? 'active' : 'btn-ghost'}" data-tab="employees">Employees</button>
+        <button class="btn btn-sm ${tab === 'positions' ? 'active' : 'btn-ghost'}" data-tab="positions">Positions & Checklists</button>
       </div>
       <div id="tabContent"></div>
     </div>
@@ -106,10 +108,12 @@ async function renderDashboard() {
 
   try {
     employeesCache = await api('/api/admin/employees');
+    positionsCache = await api('/api/admin/positions');
   } catch (e) { /* handled by api() */ }
 
   if (tab === 'shifts') renderShiftsTab();
-  else renderEmployeesTab();
+  else if (tab === 'employees') renderEmployeesTab();
+  else renderPositionsTab();
 }
 
 // ---------- Shifts tab ----------
@@ -163,7 +167,7 @@ async function renderShiftsTab() {
     <p style="color: var(--muted); font-size: 14px;">Totals for filtered results: ${fmtDuration(totalMinutes)} worked · ${fmtMoney(totalEarned)} earned</p>
     <table>
       <thead><tr>
-        <th>Employee</th><th>Start</th><th>End</th><th>Break</th><th>Worked</th><th>Rate</th><th>Earned</th><th>Status</th><th>Edited</th><th></th>
+        <th>Employee</th><th>Start</th><th>End</th><th>Break</th><th>Worked</th><th>Rate</th><th>Earned</th><th>Checklists</th><th>Status</th><th>Edited</th><th></th>
       </tr></thead>
       <tbody id="shiftsBody"></tbody>
     </table>
@@ -183,6 +187,12 @@ async function renderShiftsTab() {
   document.getElementById('addShiftBtn').addEventListener('click', () => openShiftForm(null));
 }
 
+function checklistSummary(items) {
+  if (!items) return '—';
+  const checked = items.filter((i) => i.checked).length;
+  return checked === items.length ? `✓ ${checked}/${items.length}` : `⚠ ${checked}/${items.length}`;
+}
+
 function renderShiftsRows() {
   const body = document.getElementById('shiftsBody');
   body.innerHTML = shiftsCache.map((s) => `
@@ -194,6 +204,9 @@ function renderShiftsRows() {
       <td>${fmtDuration(s.worked_minutes)}</td>
       <td>${s.hourly_rate_snapshot ? '$' + s.hourly_rate_snapshot : '—'}</td>
       <td>${fmtMoney(s.earned_amount)}</td>
+      <td>
+        ${(s.opening_checklist || s.closing_checklist) ? `<button class="btn-sm btn-ghost" data-checklist-view="${s.id}">Open: ${checklistSummary(s.opening_checklist)} · Close: ${checklistSummary(s.closing_checklist)}</button>` : '—'}
+      </td>
       <td>${s.status === 'open' ? 'Open' : 'Closed'}</td>
       <td>${s.edited_by_admin ? 'yes' : ''}</td>
       <td>
@@ -209,6 +222,34 @@ function renderShiftsRows() {
   body.querySelectorAll('[data-del]').forEach((b) =>
     b.addEventListener('click', () => deleteShift(b.dataset.del))
   );
+  body.querySelectorAll('[data-checklist-view]').forEach((b) =>
+    b.addEventListener('click', () => viewChecklist(shiftsCache.find((s) => s.id == b.dataset.checklistView)))
+  );
+}
+
+function viewChecklist(shift) {
+  const renderList = (title, items) => {
+    if (!items) return '';
+    return `
+      <h4 style="margin-bottom: 6px;">${title}</h4>
+      ${items.map((i) => `<div class="checklist-item" style="cursor:default;">
+        <input type="checkbox" disabled ${i.checked ? 'checked' : ''} />
+        <span>${i.text}</span>
+      </div>`).join('')}
+    `;
+  };
+  const wrap = document.createElement('div');
+  wrap.className = 'admin-card';
+  wrap.innerHTML = `
+    <h3>Checklist — ${shift.employee_name}</h3>
+    ${renderList('On shift start', shift.opening_checklist)}
+    ${renderList('On shift end', shift.closing_checklist)}
+    ${!shift.opening_checklist && !shift.closing_checklist ? '<p>No checklist for this shift.</p>' : ''}
+    <button class="btn btn-ghost" id="checklistClose">Close</button>
+  `;
+  document.getElementById('tabContent').prepend(wrap);
+  wrap.scrollIntoView({ behavior: 'smooth' });
+  document.getElementById('checklistClose').addEventListener('click', () => wrap.remove());
 }
 
 function openShiftForm(shift) {
@@ -314,7 +355,7 @@ function renderEmployeesTab() {
     </div>
     <div class="msg ${msg.type}">${msg.text}</div>
     <table>
-      <thead><tr><th>Name</th><th>Role</th><th>Rate</th><th>Active</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Role</th><th>Position</th><th>Rate</th><th>Active</th><th></th></tr></thead>
       <tbody id="empBody"></tbody>
     </table>
   `;
@@ -323,6 +364,7 @@ function renderEmployeesTab() {
     <tr>
       <td>${e.full_name}</td>
       <td>${e.role === 'admin' ? 'Admin' : 'Employee'}</td>
+      <td>${positionsCache.find((p) => p.id === e.position_id)?.name || '—'}</td>
       <td>${e.hourly_rate ? '$' + e.hourly_rate + '/hr' : '—'}</td>
       <td>${e.active ? 'yes' : 'no'}</td>
       <td>
@@ -353,6 +395,9 @@ function renderEmployeesTab() {
 
 function openEmployeeForm(employee) {
   const isNew = !employee;
+  const positionOptions = positionsCache
+    .map((p) => `<option value="${p.id}" ${employee && employee.position_id === p.id ? 'selected' : ''}>${p.name}</option>`)
+    .join('');
   const wrap = document.createElement('div');
   wrap.className = 'admin-card';
   wrap.innerHTML = `
@@ -360,6 +405,9 @@ function openEmployeeForm(employee) {
     <div class="field"><label>Name</label><input id="formName" value="${employee ? employee.full_name : ''}" /></div>
     <div class="field"><label>${isNew ? 'PIN (4–6 digits)' : 'New PIN (leave blank to keep current)'}</label><input id="formPin" inputmode="numeric" /></div>
     <div class="field"><label>Hourly rate ($)</label><input type="number" step="0.01" id="formRateEmp" value="${employee ? (employee.hourly_rate ?? 0) : 0}" /></div>
+    <div class="field"><label>Position (determines start/end checklist)</label>
+      <select id="formPosition"><option value="">None</option>${positionOptions}</select>
+    </div>
     ${isNew ? `<div class="field"><label>Role</label>
       <select id="formRole"><option value="employee">Employee</option><option value="admin">Admin</option></select>
     </div>` : ''}
@@ -375,6 +423,7 @@ function openEmployeeForm(employee) {
     const full_name = document.getElementById('formName').value.trim();
     const pin = document.getElementById('formPin').value.trim();
     const hourly_rate = Number(document.getElementById('formRateEmp').value || 0);
+    const position_id = document.getElementById('formPosition').value || null;
     if (!full_name) {
       document.getElementById('empFormMsg').textContent = 'Please provide a name';
       document.getElementById('empFormMsg').className = 'msg error';
@@ -384,9 +433,9 @@ function openEmployeeForm(employee) {
       if (isNew) {
         const role = document.getElementById('formRole').value;
         if (!pin) throw new Error('Please provide a PIN');
-        await api('/api/admin/employees', { method: 'POST', body: { full_name, pin, role, hourly_rate } });
+        await api('/api/admin/employees', { method: 'POST', body: { full_name, pin, role, hourly_rate, position_id } });
       } else {
-        const body = { full_name, hourly_rate };
+        const body = { full_name, hourly_rate, position_id };
         if (pin) body.pin = pin;
         await api(`/api/admin/employees/${employee.id}`, { method: 'PUT', body });
       }
@@ -398,6 +447,105 @@ function openEmployeeForm(employee) {
       document.getElementById('empFormMsg').className = 'msg error';
     }
   });
+}
+
+// ---------- Positions tab (job roles + their start/end checklists) ----------
+
+function renderPositionsTab() {
+  const el = document.getElementById('tabContent');
+  el.innerHTML = `
+    <p style="color: var(--muted); font-size: 14px;">
+      Positions let you require a different checklist for each job (e.g. Barista vs. Pastry Chef).
+      Assign a position to an employee on the Employees tab.
+    </p>
+    <div class="toolbar">
+      <button class="btn btn-primary btn-sm" id="addPosBtn">+ Add Position</button>
+    </div>
+    <div class="msg ${msg.type}">${msg.text}</div>
+    <table>
+      <thead><tr><th>Position</th><th>Start checklist items</th><th>End checklist items</th><th></th></tr></thead>
+      <tbody id="posBody"></tbody>
+    </table>
+  `;
+  const body = document.getElementById('posBody');
+  body.innerHTML = positionsCache.map((p) => `
+    <tr>
+      <td>${p.name}</td>
+      <td>${p.opening_items.length}</td>
+      <td>${p.closing_items.length}</td>
+      <td>
+        <button class="btn-sm btn-ghost" data-edit-pos="${p.id}">✎</button>
+        <button class="btn-sm btn-danger" data-del-pos="${p.id}">✕</button>
+      </td>
+    </tr>
+  `).join('');
+
+  document.getElementById('addPosBtn').addEventListener('click', () => openPositionForm(null));
+  body.querySelectorAll('[data-edit-pos]').forEach((b) =>
+    b.addEventListener('click', () => openPositionForm(positionsCache.find((p) => p.id == b.dataset.editPos)))
+  );
+  body.querySelectorAll('[data-del-pos]').forEach((b) =>
+    b.addEventListener('click', () => deletePosition(b.dataset.delPos))
+  );
+}
+
+function openPositionForm(position) {
+  const isNew = !position;
+  const wrap = document.createElement('div');
+  wrap.className = 'admin-card';
+  wrap.innerHTML = `
+    <h3>${isNew ? 'New Position' : 'Edit Position'}</h3>
+    <div class="field"><label>Position name (e.g. Barista, Pastry Chef)</label><input id="formPosName" value="${position ? position.name : ''}" /></div>
+    <div class="field"><label>Start-of-shift checklist — one item per line</label>
+      <textarea id="formOpenItems" rows="5" style="width:100%; background:#0f172a; border:1px solid var(--border); color:var(--text); border-radius:8px; padding:10px; font-family:inherit; font-size:14px;">${position ? position.opening_items.join('\n') : ''}</textarea>
+    </div>
+    <div class="field"><label>End-of-shift checklist — one item per line</label>
+      <textarea id="formCloseItems" rows="5" style="width:100%; background:#0f172a; border:1px solid var(--border); color:var(--text); border-radius:8px; padding:10px; font-family:inherit; font-size:14px;">${position ? position.closing_items.join('\n') : ''}</textarea>
+    </div>
+    <div class="msg" id="posFormMsg"></div>
+    <button class="btn btn-primary" id="posFormSave">Save</button>
+    <button class="btn btn-ghost" id="posFormCancel">Cancel</button>
+  `;
+  document.getElementById('tabContent').prepend(wrap);
+  wrap.scrollIntoView({ behavior: 'smooth' });
+
+  document.getElementById('posFormCancel').addEventListener('click', () => wrap.remove());
+  document.getElementById('posFormSave').addEventListener('click', async () => {
+    const name = document.getElementById('formPosName').value.trim();
+    const opening_items = document.getElementById('formOpenItems').value.split('\n').map((s) => s.trim()).filter(Boolean);
+    const closing_items = document.getElementById('formCloseItems').value.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (!name) {
+      document.getElementById('posFormMsg').textContent = 'Please provide a position name';
+      document.getElementById('posFormMsg').className = 'msg error';
+      return;
+    }
+    try {
+      if (isNew) {
+        await api('/api/admin/positions', { method: 'POST', body: { name, opening_items, closing_items } });
+      } else {
+        await api(`/api/admin/positions/${position.id}`, { method: 'PUT', body: { name, opening_items, closing_items } });
+      }
+      positionsCache = await api('/api/admin/positions');
+      msg = { text: 'Saved', type: 'success' };
+      renderPositionsTab();
+    } catch (e) {
+      document.getElementById('posFormMsg').textContent = e.message;
+      document.getElementById('posFormMsg').className = 'msg error';
+    }
+  });
+}
+
+async function deletePosition(id) {
+  if (!confirm('Delete this position? Employees assigned to it will keep working, just without a checklist.')) return;
+  try {
+    await api(`/api/admin/positions/${id}`, { method: 'DELETE' });
+    positionsCache = await api('/api/admin/positions');
+    msg = { text: 'Position deleted', type: 'success' };
+    renderPositionsTab();
+  } catch (e) {
+    msg = { text: e.message, type: 'error' };
+    renderPositionsTab();
+  }
 }
 
 // ---------- dispatcher ----------
