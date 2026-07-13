@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { employees: Employees, shifts: Shifts } = require('./db');
+const { employees: Employees, shifts: Shifts, positions: Positions } = require('./db');
 
 const app = express();
 app.use(cors());
@@ -20,7 +20,18 @@ const MAX_BACKDATE_MINUTES = Number(process.env.MAX_BACKDATE_MINUTES || 360); //
 // ---------- helpers ----------
 
 function publicEmployee(e) {
-  return { id: e.id, full_name: e.full_name, role: e.role, active: !!e.active, hourly_rate: e.hourly_rate ?? 0 };
+  return {
+    id: e.id,
+    full_name: e.full_name,
+    role: e.role,
+    active: !!e.active,
+    hourly_rate: e.hourly_rate ?? 0,
+    position_id: e.position_id ?? null,
+  };
+}
+
+function publicPosition(p) {
+  return { id: p.id, name: p.name, opening_items: p.opening_items || [], closing_items: p.closing_items || [] };
 }
 
 function publicShift(s) {
@@ -33,11 +44,31 @@ function publicShift(s) {
     worked_minutes: s.worked_minutes,
     hourly_rate_snapshot: s.hourly_rate_snapshot,
     earned_amount: s.earned_amount,
+    opening_checklist: s.opening_checklist ?? null,
+    closing_checklist: s.closing_checklist ?? null,
     status: s.status,
     edited_by_admin: !!s.edited_by_admin,
     created_at: s.created_at,
     closed_at: s.closed_at,
   };
+}
+
+// Verifies a submitted checklist against the position's required item list.
+// Returns { ok: true, checklist } or { ok: false, error }.
+function verifyChecklist(requiredItems, submitted) {
+  if (!requiredItems || requiredItems.length === 0) {
+    return { ok: true, checklist: null };
+  }
+  if (!Array.isArray(submitted) || submitted.length !== requiredItems.length) {
+    return { ok: false, error: 'Please complete the checklist before continuing' };
+  }
+  const matches = requiredItems.every((text, i) => submitted[i] && submitted[i].text === text);
+  const allChecked = submitted.every((item) => item.checked === true);
+  if (!matches || !allChecked) {
+    return { ok: false, error: 'Please check off every item on the checklist before continuing' };
+  }
+  const nowIso = new Date().toISOString();
+  return { ok: true, checklist: submitted.map((item) => ({ text: item.text, checked: true, checked_at: nowIso })) };
 }
 
 function computeWorkedMinutes(startAt, endAt, breakMinutes) {
@@ -80,10 +111,12 @@ app.post('/api/pin/lookup', (req, res) => {
   }
 
   const openShift = Shifts.findOpenByEmployee(employee.id);
+  const position = Positions.getById(employee.position_id);
 
   res.json({
     role: 'employee',
     employee: publicEmployee(employee),
+    position: position ? publicPosition(position) : null,
     open_shift: openShift ? publicShift(openShift) : null,
   });
 });
@@ -91,7 +124,7 @@ app.post('/api/pin/lookup', (req, res) => {
 // ---------- Shift start/end (employee, PIN-authenticated per request) ----------
 
 app.post('/api/shifts/start', (req, res) => {
-  const { pin, backdate_minutes } = req.body || {};
+  const { pin, backdate_minutes, checklist } = req.body || {};
   const employee = Employees.findByPin(pin);
   if (!employee) return res.status(404).json({ error: 'Incorrect PIN' });
   if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts" });
@@ -99,18 +132,27 @@ app.post('/api/shifts/start', (req, res) => {
   const openShift = Shifts.findOpenByEmployee(employee.id);
   if (openShift) return res.status(409).json({ error: 'You already have an open shift' });
 
+  const position = Positions.getById(employee.position_id);
+  const check = verifyChecklist(position ? position.opening_items : [], checklist);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+
   let backdateMin = Number(backdate_minutes) || 0;
   if (backdateMin < 0) backdateMin = 0;
   if (backdateMin > MAX_BACKDATE_MINUTES) backdateMin = MAX_BACKDATE_MINUTES;
 
   const startAt = new Date(Date.now() - backdateMin * 60000).toISOString();
-  const shift = Shifts.insert({ employee_id: employee.id, start_at: startAt, status: 'open' });
+  const shift = Shifts.insert({
+    employee_id: employee.id,
+    start_at: startAt,
+    status: 'open',
+    opening_checklist: check.checklist,
+  });
 
   res.json({ employee: publicEmployee(employee), shift: publicShift(shift) });
 });
 
 app.post('/api/shifts/end', (req, res) => {
-  const { pin, break_minutes } = req.body || {};
+  const { pin, break_minutes, checklist } = req.body || {};
   const employee = Employees.findByPin(pin);
   if (!employee) return res.status(404).json({ error: 'Incorrect PIN' });
   if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts" });
@@ -123,6 +165,10 @@ app.post('/api/shifts/end', (req, res) => {
   const openShift = Shifts.findOpenByEmployee(employee.id);
   if (!openShift) return res.status(409).json({ error: 'No open shift' });
 
+  const position = Positions.getById(employee.position_id);
+  const check = verifyChecklist(position ? position.closing_items : [], checklist);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+
   const nowIso = new Date().toISOString();
   const workedMinutes = computeWorkedMinutes(openShift.start_at, nowIso, breakMin);
   const earned = computeEarned(workedMinutes, employee.hourly_rate);
@@ -133,6 +179,7 @@ app.post('/api/shifts/end', (req, res) => {
     worked_minutes: workedMinutes,
     hourly_rate_snapshot: employee.hourly_rate || 0,
     earned_amount: earned,
+    closing_checklist: check.checklist,
     status: 'closed',
     closed_at: nowIso,
   });
@@ -264,7 +311,7 @@ app.get('/api/admin/employees', requireAdmin, (req, res) => {
 });
 
 app.post('/api/admin/employees', requireAdmin, (req, res) => {
-  const { full_name, pin, role, hourly_rate } = req.body || {};
+  const { full_name, pin, role, hourly_rate, position_id } = req.body || {};
   if (!full_name || !pin) return res.status(400).json({ error: 'Provide a name and PIN' });
   if (!/^\d{4,6}$/.test(String(pin))) return res.status(400).json({ error: 'PIN must be 4–6 digits' });
 
@@ -278,6 +325,7 @@ app.post('/api/admin/employees', requireAdmin, (req, res) => {
     role: role === 'admin' ? 'admin' : 'employee',
     active: true,
     hourly_rate: Number(hourly_rate) || 0,
+    position_id: position_id || null,
   });
 
   res.json(publicEmployee(employee));
@@ -291,6 +339,7 @@ app.put('/api/admin/employees/:id', requireAdmin, (req, res) => {
   if (req.body.full_name !== undefined) patch.full_name = req.body.full_name;
   if (req.body.active !== undefined) patch.active = !!req.body.active;
   if (req.body.hourly_rate !== undefined) patch.hourly_rate = Number(req.body.hourly_rate) || 0;
+  if (req.body.position_id !== undefined) patch.position_id = req.body.position_id || null;
 
   if (req.body.pin) {
     if (!/^\d{4,6}$/.test(String(req.body.pin))) {
@@ -305,6 +354,50 @@ app.put('/api/admin/employees/:id', requireAdmin, (req, res) => {
 
   const updated = Employees.update(existing.id, patch);
   res.json(publicEmployee(updated));
+});
+
+// ---------- Admin: positions CRUD (job roles + their checklists) ----------
+
+app.get('/api/admin/positions', requireAdmin, (req, res) => {
+  res.json(Positions.getAll().map(publicPosition));
+});
+
+app.post('/api/admin/positions', requireAdmin, (req, res) => {
+  const { name, opening_items, closing_items } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Provide a position name' });
+  const position = Positions.insert({
+    name: name.trim(),
+    opening_items: Array.isArray(opening_items) ? opening_items.map((s) => String(s).trim()).filter(Boolean) : [],
+    closing_items: Array.isArray(closing_items) ? closing_items.map((s) => String(s).trim()).filter(Boolean) : [],
+  });
+  res.json(publicPosition(position));
+});
+
+app.put('/api/admin/positions/:id', requireAdmin, (req, res) => {
+  const existing = Positions.getById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Position not found' });
+
+  const patch = {};
+  if (req.body.name !== undefined) patch.name = String(req.body.name).trim();
+  if (req.body.opening_items !== undefined) {
+    patch.opening_items = Array.isArray(req.body.opening_items)
+      ? req.body.opening_items.map((s) => String(s).trim()).filter(Boolean)
+      : [];
+  }
+  if (req.body.closing_items !== undefined) {
+    patch.closing_items = Array.isArray(req.body.closing_items)
+      ? req.body.closing_items.map((s) => String(s).trim()).filter(Boolean)
+      : [];
+  }
+
+  const updated = Positions.update(existing.id, patch);
+  res.json(publicPosition(updated));
+});
+
+app.delete('/api/admin/positions/:id', requireAdmin, (req, res) => {
+  const ok = Positions.delete(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Position not found' });
+  res.json({ ok: true });
 });
 
 // ---------- static frontend ----------

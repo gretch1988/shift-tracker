@@ -11,14 +11,16 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'shifts.json
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 function load() {
+  const empty = { employees: [], shifts: [], positions: [], nextEmployeeId: 1, nextShiftId: 1, nextPositionId: 1 };
   if (!fs.existsSync(DB_PATH)) {
-    return { employees: [], shifts: [], nextEmployeeId: 1, nextShiftId: 1 };
+    return empty;
   }
   try {
-    return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+    return { ...empty, ...parsed };
   } catch (e) {
     console.error('[db] Could not read data file, creating a new one:', e.message);
-    return { employees: [], shifts: [], nextEmployeeId: 1, nextShiftId: 1 };
+    return empty;
   }
 }
 
@@ -41,7 +43,7 @@ const employees = {
     const pool = activeOnly ? state.employees.filter((e) => e.active) : state.employees;
     return pool.find((e) => bcrypt.compareSync(String(pin), e.pin_hash)) || null;
   },
-  insert({ full_name, pin_hash, role, active = true, hourly_rate = 0 }) {
+  insert({ full_name, pin_hash, role, active = true, hourly_rate = 0, position_id = null }) {
     const emp = {
       id: state.nextEmployeeId++,
       full_name,
@@ -49,6 +51,7 @@ const employees = {
       role,
       active: !!active,
       hourly_rate: Number(hourly_rate) || 0,
+      position_id: position_id ? Number(position_id) : null,
       created_at: new Date().toISOString(),
     };
     state.employees.push(emp);
@@ -61,6 +64,48 @@ const employees = {
     Object.assign(emp, patch);
     persist();
     return emp;
+  },
+};
+
+// ---------- positions (job roles with start/end checklists, e.g. "Barista") ----------
+
+const positions = {
+  getAll() {
+    return [...state.positions];
+  },
+  getById(id) {
+    if (!id) return null;
+    return state.positions.find((p) => p.id === Number(id)) || null;
+  },
+  insert({ name, opening_items = [], closing_items = [] }) {
+    const pos = {
+      id: state.nextPositionId++,
+      name,
+      opening_items: opening_items.filter(Boolean),
+      closing_items: closing_items.filter(Boolean),
+      created_at: new Date().toISOString(),
+    };
+    state.positions.push(pos);
+    persist();
+    return pos;
+  },
+  update(id, patch) {
+    const pos = positions.getById(id);
+    if (!pos) return null;
+    Object.assign(pos, patch);
+    persist();
+    return pos;
+  },
+  delete(id) {
+    const idx = state.positions.findIndex((p) => p.id === Number(id));
+    if (idx === -1) return false;
+    state.positions.splice(idx, 1);
+    // Unassign this position from any employees who had it
+    state.employees.forEach((e) => {
+      if (e.position_id === Number(id)) e.position_id = null;
+    });
+    persist();
+    return true;
   },
 };
 
@@ -96,6 +141,8 @@ const shifts = {
       worked_minutes: data.worked_minutes ?? null,
       hourly_rate_snapshot: data.hourly_rate_snapshot ?? null,
       earned_amount: data.earned_amount ?? null,
+      opening_checklist: data.opening_checklist ?? null,
+      closing_checklist: data.closing_checklist ?? null,
       status: data.status || 'open',
       edited_by_admin: !!data.edited_by_admin,
       created_at: new Date().toISOString(),
@@ -130,4 +177,4 @@ if (!state.employees.some((e) => e.role === 'admin')) {
   console.log('[seed] IMPORTANT: change this PIN after your first login to the admin panel!');
 }
 
-module.exports = { employees, shifts };
+module.exports = { employees, shifts, positions };
