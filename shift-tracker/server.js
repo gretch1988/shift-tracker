@@ -2,9 +2,8 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { employees: Employees, shifts: Shifts, positions: Positions } = require('./db');
+const { employees: Employees, shifts: Shifts, positions: Positions, encryptPin, decryptPin } = require('./db');
 
 const app = express();
 app.use(cors());
@@ -31,6 +30,16 @@ function publicEmployee(e) {
     active: !!e.active,
     hourly_rate: e.hourly_rate ?? 0,
     position_id: e.position_id ?? null,
+  };
+}
+
+// Extended employee view for admin-only endpoints: includes the current PIN
+// in plaintext (decrypted server-side) so the admin can remind an employee
+// who forgot it. Never used in employee-facing/self-service responses.
+function adminPublicEmployee(e) {
+  return {
+    ...publicEmployee(e),
+    current_pin: e.pin_encrypted ? decryptPin(e.pin_encrypted) : null,
   };
 }
 
@@ -247,7 +256,7 @@ app.get('/api/admin/shifts', requireAdmin, (req, res) => {
         open_hours = Math.round(((Date.now() - new Date(r.start_at).getTime()) / 3600000) * 10) / 10;
         needs_attention = open_hours > STALE_SHIFT_HOURS;
       }
-      return { ...publicShift(r), employee_name: emp ? emp.full_name : '—', open_hours, needs_attention };
+      return { ...publicShift(r), employee_name: emp ? emp.full_name : 'Deleted employee', open_hours, needs_attention };
     })
   );
 });
@@ -333,7 +342,7 @@ app.post('/api/admin/shifts', requireAdmin, (req, res) => {
 
 app.get('/api/admin/employees', requireAdmin, (req, res) => {
   const rows = [...Employees.getAll()].sort((a, b) => a.full_name.localeCompare(b.full_name, 'en'));
-  res.json(rows.map(publicEmployee));
+  res.json(rows.map(adminPublicEmployee));
 });
 
 app.post('/api/admin/employees', requireAdmin, (req, res) => {
@@ -344,17 +353,16 @@ app.post('/api/admin/employees', requireAdmin, (req, res) => {
   const clash = Employees.findByPin(pin, { activeOnly: false });
   if (clash) return res.status(409).json({ error: 'That PIN is already used by another employee' });
 
-  const hash = bcrypt.hashSync(String(pin), 10);
   const employee = Employees.insert({
     full_name,
-    pin_hash: hash,
+    pin_encrypted: encryptPin(pin),
     role: role === 'admin' ? 'admin' : 'employee',
     active: true,
     hourly_rate: Number(hourly_rate) || 0,
     position_id: position_id || null,
   });
 
-  res.json(publicEmployee(employee));
+  res.json(adminPublicEmployee(employee));
 });
 
 app.put('/api/admin/employees/:id', requireAdmin, (req, res) => {
@@ -375,11 +383,21 @@ app.put('/api/admin/employees/:id', requireAdmin, (req, res) => {
     if (clash && clash.id !== existing.id) {
       return res.status(409).json({ error: 'That PIN is already used by another employee' });
     }
-    patch.pin_hash = bcrypt.hashSync(String(req.body.pin), 10);
+    patch.pin_encrypted = encryptPin(req.body.pin);
   }
 
   const updated = Employees.update(existing.id, patch);
-  res.json(publicEmployee(updated));
+  res.json(adminPublicEmployee(updated));
+});
+
+app.delete('/api/admin/employees/:id', requireAdmin, (req, res) => {
+  const existing = Employees.getById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Employee not found' });
+  if (existing.role === 'admin') {
+    return res.status(400).json({ error: 'Admin accounts cannot be deleted here' });
+  }
+  Employees.delete(existing.id);
+  res.json({ ok: true });
 });
 
 // ---------- Admin: positions CRUD (job roles + their checklists) ----------

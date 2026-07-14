@@ -5,10 +5,44 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'shifts.json');
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+// PINs are stored reversibly (AES-256-GCM, key derived from JWT_SECRET) so an
+// admin can look up an employee's current PIN in the admin panel. This is a
+// deliberate trade-off: these are 4-6 digit kiosk PINs, not account
+// passwords, and being able to remind a forgetful employee of their PIN
+// matters more here than one-way hashing. Employees created/updated before
+// this feature shipped still have their PIN stored as a one-way bcrypt hash
+// (in `pin_hash`) — those keep working for login, but can't be displayed
+// until the admin sets a new PIN for them (which switches them over to the
+// reversible scheme automatically).
+const PIN_KEY = crypto.createHash('sha256').update(process.env.JWT_SECRET || 'change-me-in-production').digest();
+
+function encryptPin(pin) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', PIN_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(String(pin), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, encrypted]).toString('base64');
+}
+
+function decryptPin(encoded) {
+  try {
+    const buf = Buffer.from(encoded, 'base64');
+    const iv = buf.subarray(0, 12);
+    const tag = buf.subarray(12, 28);
+    const data = buf.subarray(28);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', PIN_KEY, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+  } catch (e) {
+    return null;
+  }
+}
 
 function load() {
   const empty = { employees: [], shifts: [], positions: [], nextEmployeeId: 1, nextShiftId: 1, nextPositionId: 1 };
@@ -41,13 +75,22 @@ const employees = {
   },
   findByPin(pin, { activeOnly = true } = {}) {
     const pool = activeOnly ? state.employees.filter((e) => e.active) : state.employees;
-    return pool.find((e) => bcrypt.compareSync(String(pin), e.pin_hash)) || null;
+    return pool.find((e) => {
+      if (e.pin_encrypted) {
+        const decrypted = decryptPin(e.pin_encrypted);
+        return decrypted !== null && decrypted === String(pin);
+      }
+      if (e.pin_hash) {
+        return bcrypt.compareSync(String(pin), e.pin_hash);
+      }
+      return false;
+    }) || null;
   },
-  insert({ full_name, pin_hash, role, active = true, hourly_rate = 0, position_id = null }) {
+  insert({ full_name, pin_encrypted, role, active = true, hourly_rate = 0, position_id = null }) {
     const emp = {
       id: state.nextEmployeeId++,
       full_name,
-      pin_hash,
+      pin_encrypted,
       role,
       active: !!active,
       hourly_rate: Number(hourly_rate) || 0,
@@ -64,6 +107,13 @@ const employees = {
     Object.assign(emp, patch);
     persist();
     return emp;
+  },
+  delete(id) {
+    const idx = state.employees.findIndex((e) => e.id === Number(id));
+    if (idx === -1) return false;
+    state.employees.splice(idx, 1);
+    persist();
+    return true;
   },
 };
 
@@ -172,9 +222,9 @@ const shifts = {
 if (!state.employees.some((e) => e.role === 'admin')) {
   const adminName = process.env.ADMIN_NAME || 'Owner';
   const adminPin = process.env.ADMIN_PIN || '9999';
-  employees.insert({ full_name: adminName, pin_hash: bcrypt.hashSync(String(adminPin), 10), role: 'admin', active: true });
+  employees.insert({ full_name: adminName, pin_encrypted: encryptPin(adminPin), role: 'admin', active: true });
   console.log(`[seed] Created admin "${adminName}" with default PIN: ${adminPin}`);
   console.log('[seed] IMPORTANT: change this PIN after your first login to the admin panel!');
 }
 
-module.exports = { employees, shifts, positions };
+module.exports = { employees, shifts, positions, encryptPin, decryptPin };
