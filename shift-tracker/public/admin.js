@@ -402,6 +402,7 @@ function renderEmployeesTab() {
       <td>
         <button class="btn-sm btn-ghost" data-edit-emp="${e.id}">✎</button>
         ${e.role === 'employee' ? `<button class="btn-sm ${e.active ? 'btn-danger' : 'btn-success'}" data-toggle="${e.id}">${e.active ? 'Deactivate' : 'Activate'}</button>` : ''}
+        ${e.role === 'employee' ? `<button class="btn-sm btn-danger" data-delete-emp="${e.id}">Delete</button>` : ''}
       </td>
     </tr>
   `).join('');
@@ -409,6 +410,9 @@ function renderEmployeesTab() {
   document.getElementById('addEmpBtn').addEventListener('click', () => openEmployeeForm(null));
   body.querySelectorAll('[data-edit-emp]').forEach((b) =>
     b.addEventListener('click', () => openEmployeeForm(employeesCache.find((e) => e.id == b.dataset.editEmp)))
+  );
+  body.querySelectorAll('[data-delete-emp]').forEach((b) =>
+    b.addEventListener('click', () => deleteEmployee(employeesCache.find((e) => e.id == b.dataset.deleteEmp)))
   );
   body.querySelectorAll('[data-toggle]').forEach((b) =>
     b.addEventListener('click', async () => {
@@ -425,6 +429,19 @@ function renderEmployeesTab() {
   );
 }
 
+async function deleteEmployee(employee) {
+  if (!confirm(`Delete ${employee.full_name}? Their PIN will stop working immediately. Any shifts they already logged stay in the records.`)) return;
+  try {
+    await api(`/api/admin/employees/${employee.id}`, { method: 'DELETE' });
+    employeesCache = await api('/api/admin/employees');
+    msg = { text: 'Employee deleted', type: 'success' };
+    renderEmployeesTab();
+  } catch (e) {
+    msg = { text: e.message, type: 'error' };
+    renderEmployeesTab();
+  }
+}
+
 function openEmployeeForm(employee) {
   const isNew = !employee;
   const positionOptions = positionsCache
@@ -435,7 +452,12 @@ function openEmployeeForm(employee) {
   wrap.innerHTML = `
     <h3>${isNew ? 'New Employee' : 'Edit Employee'}</h3>
     <div class="field"><label>Name</label><input id="formName" value="${employee ? employee.full_name : ''}" /></div>
-    <div class="field"><label>${isNew ? 'PIN (4–6 digits)' : 'New PIN (leave blank to keep current)'}</label><input id="formPin" inputmode="numeric" /></div>
+    ${!isNew ? `<div class="field"><label>Current PIN</label>
+      <div style="padding:10px; border-radius:8px; border:1px solid var(--border); font-size:18px; letter-spacing:2px;">
+        ${employee.current_pin ?? 'Not visible — set a new PIN below to make it viewable from now on'}
+      </div>
+    </div>` : ''}
+    <div class="field"><label>${isNew ? 'PIN (4–6 digits)' : 'Set new PIN (leave blank to keep current)'}</label><input id="formPin" inputmode="numeric" /></div>
     <div class="field"><label>Hourly rate ($)</label><input type="number" step="0.01" id="formRateEmp" value="${employee ? (employee.hourly_rate ?? 0) : 0}" /></div>
     <div class="field"><label>Position (determines start/end checklist)</label>
       <select id="formPosition"><option value="">None</option>${positionOptions}</select>

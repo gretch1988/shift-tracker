@@ -20,7 +20,6 @@ const STRINGS = {
     shiftStartedTitle: 'Shift Started',
     onClockMsg: "You're on the clock. Please finish the opening checklist:",
     confirmChecklist: 'Confirm Checklist',
-    finishLater: "I'll finish this later",
     shiftStartedMsg: 'Shift started. Have a great shift!',
     checkAllBeforeConfirm: 'Please check off every item before confirming.',
     endShiftTitle: 'End Shift',
@@ -55,7 +54,6 @@ const STRINGS = {
     shiftStartedTitle: 'Смена начата',
     onClockMsg: 'Вы уже на смене. Пожалуйста, пройдите чек-лист открытия:',
     confirmChecklist: 'Подтвердить чек-лист',
-    finishLater: 'Заполню позже',
     shiftStartedMsg: 'Смена начата. Хорошей работы!',
     checkAllBeforeConfirm: 'Пожалуйста, отметьте все пункты перед подтверждением.',
     endShiftTitle: 'Завершение смены',
@@ -267,12 +265,22 @@ async function submitPin() {
       render();
       return;
     }
-    state.screen = 'home';
     state.data = result;
     state.pin = pin; // keep for start/end calls
     state.msg = '';
     state.openChecked = result.position ? result.position.opening_items.map(() => false) : [];
     state.closeChecked = result.position ? result.position.closing_items.map(() => false) : [];
+
+    // If they have an open shift with an unfinished opening checklist (e.g.
+    // they got pulled away and the kiosk timed out), send them straight back
+    // into it instead of the normal home screen — there's no other way back in.
+    const openingItems = result.position ? result.position.opening_items : [];
+    if (result.open_shift && openingItems.length && !result.open_shift.opening_checklist) {
+      state.screen = 'openingChecklist';
+    } else {
+      state.screen = 'home';
+    }
+
     render();
     resetInactivityTimer();
   } catch (e) {
@@ -370,13 +378,10 @@ function renderOpeningChecklist() {
       ${checklistHtml(openingItems, state.openChecked, 'open')}
       <div class="msg ${state.msgType}">${state.msg}</div>
       <button class="btn btn-primary" id="confirmOpen">${t('confirmChecklist')}</button>
-      <button class="btn btn-ghost" id="laterOpen">${t('finishLater')}</button>
     </div>
   `;
 
   bindChecklist('open', state.openChecked);
-
-  document.getElementById('laterOpen').addEventListener('click', goHome);
 
   document.getElementById('confirmOpen').addEventListener('click', async () => {
     if (state.openChecked.some((c) => !c)) {
