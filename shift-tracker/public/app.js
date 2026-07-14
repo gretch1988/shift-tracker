@@ -1,6 +1,116 @@
 const API = '';
 const app = document.getElementById('app');
 
+// ---------- i18n ----------
+
+const STRINGS = {
+  en: {
+    enterPin: 'Enter your PIN',
+    clear: 'Clear',
+    adminPanel: 'Admin panel →',
+    adminPinDetected: "That's an admin PIN. Please open the admin panel instead.",
+    noShiftOpen: 'No shift open',
+    shiftOpenSince: (t) => `Shift open since ${t}`,
+    endShift: 'End Shift',
+    startShift: 'Start Shift',
+    backdateLabel: 'Arrived earlier and forgot to clock in? Minutes ago:',
+    myShifts: 'My Shifts',
+    logOut: 'Log Out',
+    checklistLabel: 'Checklist — check off every item',
+    shiftStartedTitle: 'Shift Started',
+    onClockMsg: "You're on the clock. Please finish the opening checklist:",
+    confirmChecklist: 'Confirm Checklist',
+    finishLater: "I'll finish this later",
+    shiftStartedMsg: 'Shift started. Have a great shift!',
+    checkAllBeforeConfirm: 'Please check off every item before confirming.',
+    endShiftTitle: 'End Shift',
+    breakLabel: 'How many minutes was your break?',
+    cancel: 'Cancel',
+    checkAllBeforeEnd: 'Please check off every item on the checklist before ending your shift.',
+    shiftCompleteTitle: 'Shift Complete',
+    started: 'Started:',
+    ended: 'Ended:',
+    breakMin: (m) => `Break: ${m} min`,
+    worked: 'Worked:',
+    earned: 'Earned:',
+    done: 'Done',
+    noShiftsYet: 'No shifts yet.',
+    back: 'Back',
+    openWord: 'open',
+    breakShort: (m) => `Break: ${m} min`,
+  },
+  ru: {
+    enterPin: 'Введите ПИН-код',
+    clear: 'Очистить',
+    adminPanel: 'Панель администратора →',
+    adminPinDetected: 'Это ПИН администратора. Откройте панель администратора.',
+    noShiftOpen: 'Смена не открыта',
+    shiftOpenSince: (t) => `Смена открыта с ${t}`,
+    endShift: 'Завершить смену',
+    startShift: 'Начать смену',
+    backdateLabel: 'Пришли раньше и забыли открыть смену? Минут назад:',
+    myShifts: 'Мои смены',
+    logOut: 'Выйти',
+    checklistLabel: 'Чек-лист — отметьте все пункты',
+    shiftStartedTitle: 'Смена начата',
+    onClockMsg: 'Вы уже на смене. Пожалуйста, пройдите чек-лист открытия:',
+    confirmChecklist: 'Подтвердить чек-лист',
+    finishLater: 'Заполню позже',
+    shiftStartedMsg: 'Смена начата. Хорошей работы!',
+    checkAllBeforeConfirm: 'Пожалуйста, отметьте все пункты перед подтверждением.',
+    endShiftTitle: 'Завершение смены',
+    breakLabel: 'Сколько минут длился перерыв?',
+    cancel: 'Отмена',
+    checkAllBeforeEnd: 'Пожалуйста, отметьте все пункты чек-листа перед завершением смены.',
+    shiftCompleteTitle: 'Смена завершена',
+    started: 'Начало:',
+    ended: 'Конец:',
+    breakMin: (m) => `Перерыв: ${m} мин`,
+    worked: 'Отработано:',
+    earned: 'Заработано:',
+    done: 'Готово',
+    noShiftsYet: 'Смен пока нет.',
+    back: 'Назад',
+    openWord: 'открыта',
+    breakShort: (m) => `Перерыв: ${m} мин`,
+  },
+};
+
+// Translations for the fixed set of error messages the server can return.
+const ERROR_TRANSLATIONS = {
+  ru: {
+    'Enter a PIN': 'Введите ПИН-код',
+    'Incorrect PIN': 'Неверный ПИН-код',
+    "Admins don't clock in shifts": 'Администраторы не отмечают смены',
+    'You already have an open shift': 'У вас уже есть открытая смена',
+    'No open shift': 'Нет открытой смены',
+    'Enter a valid break time (minutes)': 'Введите корректное время перерыва (в минутах)',
+    'Please check off every item on the checklist before continuing': 'Пожалуйста, отметьте все пункты чек-листа',
+    'Please complete the checklist before continuing': 'Пожалуйста, заполните чек-лист полностью',
+    'Not available for admins': 'Недоступно для администраторов',
+    'Server error': 'Ошибка сервера',
+    'No connection to the server': 'Нет соединения с сервером',
+  },
+};
+
+function getLang() {
+  return localStorage.getItem('kiosk_lang') || 'en';
+}
+function setLang(lang) {
+  localStorage.setItem('kiosk_lang', lang);
+}
+function t(key, ...args) {
+  const entry = STRINGS[getLang()][key];
+  return typeof entry === 'function' ? entry(...args) : entry;
+}
+function translateError(message) {
+  const lang = getLang();
+  if (lang === 'en') return message;
+  return (ERROR_TRANSLATIONS[lang] && ERROR_TRANSLATIONS[lang][message]) || message;
+}
+
+// ---------- state ----------
+
 const initialState = () => ({
   screen: 'pin',
   pin: '',
@@ -36,21 +146,22 @@ async function api(path, body) {
     body: JSON.stringify(body || {}),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || 'Server error');
+  if (!res.ok) throw new Error(translateError(json.error || 'Server error'));
   return json;
 }
 
 function fmtTime(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
-  return d.toLocaleString('en-US', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const locale = getLang() === 'ru' ? 'ru-RU' : 'en-US';
+  return d.toLocaleString(locale, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtDuration(minutes) {
   if (minutes === null || minutes === undefined) return '—';
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
-  return `${h}h ${m}m`;
+  return getLang() === 'ru' ? `${h}ч ${m}м` : `${h}h ${m}m`;
 }
 
 function fmtMoney(amount) {
@@ -61,7 +172,7 @@ function fmtMoney(amount) {
 function checklistHtml(items, checkedArr, idPrefix) {
   return `
     <div class="field" style="text-align:left;">
-      <label>Checklist — check off every item</label>
+      <label>${t('checklistLabel')}</label>
       ${items.map((text, i) => `
         <label class="checklist-item">
           <input type="checkbox" data-checklist="${idPrefix}" data-index="${i}" ${checkedArr[i] ? 'checked' : ''} />
@@ -80,6 +191,24 @@ function bindChecklist(idPrefix, checkedArr) {
   });
 }
 
+function langToggleHtml() {
+  const lang = getLang();
+  return `
+    <div style="position:absolute; top:16px; right:16px;">
+      <button id="langToggle" class="btn-sm btn-ghost" style="padding:6px 12px; border-radius:8px; border:1px solid var(--border); background:transparent; color:var(--muted); cursor:pointer;">
+        ${lang === 'en' ? 'RU' : 'EN'}
+      </button>
+    </div>
+  `;
+}
+function bindLangToggle() {
+  const btn = document.getElementById('langToggle');
+  if (btn) btn.addEventListener('click', () => {
+    setLang(getLang() === 'en' ? 'ru' : 'en');
+    render();
+  });
+}
+
 // ---------- PIN screen ----------
 
 function renderPin() {
@@ -88,22 +217,27 @@ function renderPin() {
   ).join('');
 
   app.innerHTML = `
-    <div class="card">
-      <div class="clock" id="clock"></div>
-      <h1>Enter your PIN</h1>
-      <div class="pin-display">${dots}</div>
-      <div class="msg ${state.msgType}">${state.msg}</div>
-      <div class="pin-pad">
-        ${[1,2,3,4,5,6,7,8,9].map(n => `<button data-key="${n}">${n}</button>`).join('')}
-        <button data-key="clear">Clear</button>
-        <button data-key="0">0</button>
-        <button data-key="back">⌫</button>
+    <div style="position:relative; width:100%; max-width:420px;">
+      ${langToggleHtml()}
+      <div class="card">
+        <div class="clock" id="clock"></div>
+        <h1>${t('enterPin')}</h1>
+        <div class="pin-display">${dots}</div>
+        <div class="msg ${state.msgType}">${state.msg}</div>
+        <div class="pin-pad">
+          ${[1,2,3,4,5,6,7,8,9].map(n => `<button data-key="${n}">${n}</button>`).join('')}
+          <button data-key="clear">${t('clear')}</button>
+          <button data-key="0">0</button>
+          <button data-key="back">⌫</button>
+        </div>
+        <div class="link-row"><a href="/admin.html">${t('adminPanel')}</a></div>
       </div>
-      <div class="link-row"><a href="/admin.html">Admin panel →</a></div>
     </div>
   `;
 
-  document.getElementById('clock').textContent = new Date().toLocaleString('en-US');
+  bindLangToggle();
+
+  document.getElementById('clock').textContent = new Date().toLocaleString(getLang() === 'ru' ? 'ru-RU' : 'en-US');
 
   app.querySelectorAll('.pin-pad button').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -127,7 +261,7 @@ async function submitPin() {
   try {
     const result = await api('/api/pin/lookup', { pin });
     if (result.role === 'admin') {
-      state.msg = `That's an admin PIN. Please open the admin panel instead.`;
+      state.msg = t('adminPinDetected');
       state.msgType = 'success';
       state.pin = '';
       render();
@@ -159,22 +293,22 @@ function renderHome() {
     <div class="card">
       <div class="employee-name">${employee.full_name}</div>
       <div class="status-badge ${isOpen ? 'open' : 'idle'}">
-        ${isOpen ? `Shift open since ${fmtTime(open_shift.start_at)}` : 'No shift open'}
+        ${isOpen ? t('shiftOpenSince', fmtTime(open_shift.start_at)) : t('noShiftOpen')}
       </div>
       <div class="msg ${state.msgType}">${state.msg}</div>
       ${
         isOpen
-          ? `<button class="btn btn-danger" id="endBtn">End Shift</button>`
+          ? `<button class="btn btn-danger" id="endBtn">${t('endShift')}</button>`
           : `
             <div class="field" style="text-align:left;">
-              <label>Arrived earlier and forgot to clock in? Minutes ago:</label>
+              <label>${t('backdateLabel')}</label>
               <input type="number" id="backdateInput" min="0" max="360" value="${state.backdate || 0}" />
             </div>
-            <button class="btn btn-success" id="startBtn">Start Shift</button>
+            <button class="btn btn-success" id="startBtn">${t('startShift')}</button>
           `
       }
-      <button class="btn btn-ghost" id="historyBtn">My Shifts</button>
-      <button class="btn btn-ghost" id="backBtn">Log Out</button>
+      <button class="btn btn-ghost" id="historyBtn">${t('myShifts')}</button>
+      <button class="btn btn-ghost" id="backBtn">${t('logOut')}</button>
     </div>
   `;
 
@@ -211,7 +345,7 @@ async function doStart() {
       state.screen = 'openingChecklist';
       state.msg = '';
     } else {
-      state.msg = 'Shift started. Have a great shift!';
+      state.msg = t('shiftStartedMsg');
       state.msgType = 'success';
     }
     render();
@@ -231,12 +365,12 @@ function renderOpeningChecklist() {
 
   app.innerHTML = `
     <div class="card">
-      <h1>Shift Started</h1>
-      <p style="color: var(--muted); font-size: 14px;">You're on the clock. Please finish the opening checklist:</p>
+      <h1>${t('shiftStartedTitle')}</h1>
+      <p style="color: var(--muted); font-size: 14px;">${t('onClockMsg')}</p>
       ${checklistHtml(openingItems, state.openChecked, 'open')}
       <div class="msg ${state.msgType}">${state.msg}</div>
-      <button class="btn btn-primary" id="confirmOpen">Confirm Checklist</button>
-      <button class="btn btn-ghost" id="laterOpen">I'll finish this later</button>
+      <button class="btn btn-primary" id="confirmOpen">${t('confirmChecklist')}</button>
+      <button class="btn btn-ghost" id="laterOpen">${t('finishLater')}</button>
     </div>
   `;
 
@@ -246,7 +380,7 @@ function renderOpeningChecklist() {
 
   document.getElementById('confirmOpen').addEventListener('click', async () => {
     if (state.openChecked.some((c) => !c)) {
-      state.msg = 'Please check off every item before confirming.';
+      state.msg = t('checkAllBeforeConfirm');
       state.msgType = 'error';
       render();
       return;
@@ -255,7 +389,7 @@ function renderOpeningChecklist() {
     try {
       await api('/api/shifts/checklist/opening', { pin: state.pin, checklist });
       state.screen = 'home';
-      state.msg = 'Shift started. Have a great shift!';
+      state.msg = t('shiftStartedMsg');
       state.msgType = 'success';
       render();
       resetInactivityTimer();
@@ -275,15 +409,15 @@ function renderBreak() {
 
   app.innerHTML = `
     <div class="card">
-      <h1>End Shift</h1>
+      <h1>${t('endShiftTitle')}</h1>
       ${closingItems.length ? checklistHtml(closingItems, state.closeChecked, 'close') : ''}
       <div class="field">
-        <label>How many minutes was your break?</label>
+        <label>${t('breakLabel')}</label>
         <input type="number" id="breakInput" inputmode="numeric" min="0" placeholder="0" autofocus />
       </div>
       <div class="msg ${state.msgType}">${state.msg}</div>
-      <button class="btn btn-danger" id="confirmEnd">End Shift</button>
-      <button class="btn btn-ghost" id="cancelEnd">Cancel</button>
+      <button class="btn btn-danger" id="confirmEnd">${t('endShift')}</button>
+      <button class="btn btn-ghost" id="cancelEnd">${t('cancel')}</button>
     </div>
   `;
 
@@ -296,7 +430,7 @@ function renderBreak() {
 
   document.getElementById('confirmEnd').addEventListener('click', async () => {
     if (closingItems.length && state.closeChecked.some((c) => !c)) {
-      state.msg = 'Please check off every item on the checklist before ending your shift.';
+      state.msg = t('checkAllBeforeEnd');
       state.msgType = 'error';
       render();
       return;
@@ -327,13 +461,13 @@ function renderSummary() {
   const hasRate = s.hourly_rate_snapshot && s.hourly_rate_snapshot > 0;
   app.innerHTML = `
     <div class="card">
-      <h1>Shift Complete</h1>
-      <p>Started: ${fmtTime(s.start_at)}</p>
-      <p>Ended: ${fmtTime(s.end_at)}</p>
-      <p>Break: ${s.break_minutes} min</p>
-      <p class="employee-name">Worked: ${fmtDuration(s.worked_minutes)}</p>
-      ${hasRate ? `<p class="employee-name">Earned: ${fmtMoney(s.earned_amount)}</p>` : ''}
-      <button class="btn btn-primary" id="okBtn">Done</button>
+      <h1>${t('shiftCompleteTitle')}</h1>
+      <p>${t('started')} ${fmtTime(s.start_at)}</p>
+      <p>${t('ended')} ${fmtTime(s.end_at)}</p>
+      <p>${t('breakMin', s.break_minutes)}</p>
+      <p class="employee-name">${t('worked')} ${fmtDuration(s.worked_minutes)}</p>
+      ${hasRate ? `<p class="employee-name">${t('earned')} ${fmtMoney(s.earned_amount)}</p>` : ''}
+      <button class="btn btn-primary" id="okBtn">${t('done')}</button>
     </div>
   `;
   document.getElementById('okBtn').addEventListener('click', goHome);
@@ -362,18 +496,18 @@ function renderHistory() {
         const hasRate = s.hourly_rate_snapshot && s.hourly_rate_snapshot > 0;
         return `
       <div class="history-item">
-        <div class="date">${fmtTime(s.start_at)} → ${s.end_at ? fmtTime(s.end_at) : 'open'}</div>
-        <div>Break: ${s.break_minutes ?? 0} min · <span class="worked">${fmtDuration(s.worked_minutes)}</span>${hasRate ? ` · <span class="worked">${fmtMoney(s.earned_amount)}</span>` : ''}</div>
+        <div class="date">${fmtTime(s.start_at)} → ${s.end_at ? fmtTime(s.end_at) : t('openWord')}</div>
+        <div>${t('breakShort', s.break_minutes ?? 0)} · <span class="worked">${fmtDuration(s.worked_minutes)}</span>${hasRate ? ` · <span class="worked">${fmtMoney(s.earned_amount)}</span>` : ''}</div>
       </div>
     `;
       }).join('')
-    : '<p>No shifts yet.</p>';
+    : `<p>${t('noShiftsYet')}</p>`;
 
   app.innerHTML = `
     <div class="card">
-      <h1>My Shifts</h1>
+      <h1>${t('myShifts')}</h1>
       <div class="history">${items}</div>
-      <button class="btn btn-ghost" id="backBtn">Back</button>
+      <button class="btn btn-ghost" id="backBtn">${t('back')}</button>
     </div>
   `;
   document.getElementById('backBtn').addEventListener('click', () => {
@@ -396,7 +530,7 @@ function render() {
 render();
 setInterval(() => {
   const clockEl = document.getElementById('clock');
-  if (clockEl) clockEl.textContent = new Date().toLocaleString('en-US');
+  if (clockEl) clockEl.textContent = new Date().toLocaleString(getLang() === 'ru' ? 'ru-RU' : 'en-US');
 }, 1000);
 
 ['click', 'touchstart'].forEach((evt) => {

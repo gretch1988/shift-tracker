@@ -85,6 +85,9 @@ h1 {
   color: var(--text);
   cursor: pointer;
 }
+.pin-pad button[data-key="clear"] {
+  font-size: 14px;
+}
 .pin-pad button:active { background: var(--accent); }
 .pin-pad button.wide { grid-column: span 1; }
 

@@ -17,6 +17,10 @@ const PORT = process.env.PORT || 3000;
 // no admin approval needed) to cover "forgot to clock in" situations.
 const MAX_BACKDATE_MINUTES = Number(process.env.MAX_BACKDATE_MINUTES || 360); // 6 hours
 
+// A shift left open longer than this is flagged for the admin as likely
+// forgotten (employee left without tapping "End Shift").
+const STALE_SHIFT_HOURS = Number(process.env.STALE_SHIFT_HOURS || 14);
+
 // ---------- helpers ----------
 
 function publicEmployee(e) {
@@ -101,10 +105,10 @@ function requireAdmin(req, res, next) {
 
 app.post('/api/pin/lookup', (req, res) => {
   const { pin } = req.body || {};
-  if (!pin) return res.status(400).json({ error: 'Enter a PIN' });
+  if (!pin) return res.status(400).json({ error: 'Enter a PIN', code: 'PIN_REQUIRED' });
 
   const employee = Employees.findByPin(pin);
-  if (!employee) return res.status(404).json({ error: 'Incorrect PIN' });
+  if (!employee) return res.status(404).json({ error: 'Incorrect PIN', code: 'INVALID_PIN' });
 
   if (employee.role === 'admin') {
     return res.json({ role: 'admin', full_name: employee.full_name });
@@ -126,11 +130,11 @@ app.post('/api/pin/lookup', (req, res) => {
 app.post('/api/shifts/start', (req, res) => {
   const { pin, backdate_minutes } = req.body || {};
   const employee = Employees.findByPin(pin);
-  if (!employee) return res.status(404).json({ error: 'Incorrect PIN' });
-  if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts" });
+  if (!employee) return res.status(404).json({ error: 'Incorrect PIN', code: 'INVALID_PIN' });
+  if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts", code: 'ADMIN_NO_CLOCK' });
 
   const openShift = Shifts.findOpenByEmployee(employee.id);
-  if (openShift) return res.status(409).json({ error: 'You already have an open shift' });
+  if (openShift) return res.status(409).json({ error: 'You already have an open shift', code: 'SHIFT_ALREADY_OPEN' });
 
   // The shift starts the instant the button is pressed — the employee is
   // already on the clock. Any start-of-shift checklist for their position is
@@ -153,15 +157,15 @@ app.post('/api/shifts/start', (req, res) => {
 app.post('/api/shifts/checklist/opening', (req, res) => {
   const { pin, checklist } = req.body || {};
   const employee = Employees.findByPin(pin);
-  if (!employee) return res.status(404).json({ error: 'Incorrect PIN' });
-  if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts" });
+  if (!employee) return res.status(404).json({ error: 'Incorrect PIN', code: 'INVALID_PIN' });
+  if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts", code: 'ADMIN_NO_CLOCK' });
 
   const openShift = Shifts.findOpenByEmployee(employee.id);
-  if (!openShift) return res.status(409).json({ error: 'No open shift' });
+  if (!openShift) return res.status(409).json({ error: 'No open shift', code: 'NO_OPEN_SHIFT' });
 
   const position = Positions.getById(employee.position_id);
   const check = verifyChecklist(position ? position.opening_items : [], checklist);
-  if (!check.ok) return res.status(400).json({ error: check.error });
+  if (!check.ok) return res.status(400).json({ error: check.error, code: 'CHECKLIST_INCOMPLETE' });
 
   const shift = Shifts.update(openShift.id, { opening_checklist: check.checklist });
   res.json({ employee: publicEmployee(employee), shift: publicShift(shift) });
@@ -170,20 +174,20 @@ app.post('/api/shifts/checklist/opening', (req, res) => {
 app.post('/api/shifts/end', (req, res) => {
   const { pin, break_minutes, checklist } = req.body || {};
   const employee = Employees.findByPin(pin);
-  if (!employee) return res.status(404).json({ error: 'Incorrect PIN' });
-  if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts" });
+  if (!employee) return res.status(404).json({ error: 'Incorrect PIN', code: 'INVALID_PIN' });
+  if (employee.role !== 'employee') return res.status(400).json({ error: "Admins don't clock in shifts", code: 'ADMIN_NO_CLOCK' });
 
   const breakMin = Number(break_minutes);
   if (!Number.isFinite(breakMin) || breakMin < 0) {
-    return res.status(400).json({ error: 'Enter a valid break time (minutes)' });
+    return res.status(400).json({ error: 'Enter a valid break time (minutes)', code: 'INVALID_BREAK' });
   }
 
   const openShift = Shifts.findOpenByEmployee(employee.id);
-  if (!openShift) return res.status(409).json({ error: 'No open shift' });
+  if (!openShift) return res.status(409).json({ error: 'No open shift', code: 'NO_OPEN_SHIFT' });
 
   const position = Positions.getById(employee.position_id);
   const check = verifyChecklist(position ? position.closing_items : [], checklist);
-  if (!check.ok) return res.status(400).json({ error: check.error });
+  if (!check.ok) return res.status(400).json({ error: check.error, code: 'CHECKLIST_INCOMPLETE' });
 
   const nowIso = new Date().toISOString();
   const workedMinutes = computeWorkedMinutes(openShift.start_at, nowIso, breakMin);
@@ -208,8 +212,8 @@ app.post('/api/shifts/end', (req, res) => {
 app.post('/api/shifts/mine', (req, res) => {
   const { pin } = req.body || {};
   const employee = Employees.findByPin(pin, { activeOnly: false });
-  if (!employee) return res.status(404).json({ error: 'Incorrect PIN' });
-  if (employee.role !== 'employee') return res.status(400).json({ error: 'Not available for admins' });
+  if (!employee) return res.status(404).json({ error: 'Incorrect PIN', code: 'INVALID_PIN' });
+  if (employee.role !== 'employee') return res.status(400).json({ error: 'Not available for admins', code: 'ADMIN_NO_CLOCK' });
 
   const shifts = Shifts.getByEmployee(employee.id).slice(0, 200);
   res.json({ employee: publicEmployee(employee), shifts: shifts.map(publicShift) });
@@ -237,7 +241,13 @@ app.get('/api/admin/shifts', requireAdmin, (req, res) => {
   res.json(
     rows.map((r) => {
       const emp = Employees.getById(r.employee_id);
-      return { ...publicShift(r), employee_name: emp ? emp.full_name : '—' };
+      let open_hours = null;
+      let needs_attention = false;
+      if (r.status === 'open') {
+        open_hours = Math.round(((Date.now() - new Date(r.start_at).getTime()) / 3600000) * 10) / 10;
+        needs_attention = open_hours > STALE_SHIFT_HOURS;
+      }
+      return { ...publicShift(r), employee_name: emp ? emp.full_name : '—', open_hours, needs_attention };
     })
   );
 });
@@ -414,6 +424,20 @@ app.delete('/api/admin/positions/:id', requireAdmin, (req, res) => {
   const ok = Positions.delete(req.params.id);
   if (!ok) return res.status(404).json({ error: 'Position not found' });
   res.json({ ok: true });
+});
+
+// ---------- Admin: full data backup ----------
+
+app.get('/api/admin/backup', requireAdmin, (req, res) => {
+  const backup = {
+    exported_at: new Date().toISOString(),
+    employees: Employees.getAll(),
+    shifts: Shifts.getAll({}),
+    positions: Positions.getAll(),
+  };
+  const filename = `shift-tracker-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.json(backup);
 });
 
 // ---------- static frontend ----------

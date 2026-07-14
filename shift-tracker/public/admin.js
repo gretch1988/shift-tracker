@@ -29,6 +29,25 @@ function logout() {
   render();
 }
 
+async function downloadBackup() {
+  try {
+    const res = await fetch(API + '/api/admin/backup', { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error('Could not generate backup');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `shift-tracker-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    msg = { text: e.message, type: 'error' };
+    render();
+  }
+}
+
 function fmtDT(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -91,7 +110,10 @@ async function renderDashboard() {
     <div class="admin-card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
         <h2>Shift Tracker — ${adminName}</h2>
-        <button class="btn btn-ghost btn-sm" id="logoutBtn">Log Out</button>
+        <div>
+          <button class="btn btn-ghost btn-sm" id="backupBtn">Download Backup</button>
+          <button class="btn btn-ghost btn-sm" id="logoutBtn">Log Out</button>
+        </div>
       </div>
       <div class="tabs">
         <button class="btn btn-sm ${tab === 'shifts' ? 'active' : 'btn-ghost'}" data-tab="shifts">Shifts</button>
@@ -102,6 +124,7 @@ async function renderDashboard() {
     </div>
   `;
   document.getElementById('logoutBtn').addEventListener('click', logout);
+  document.getElementById('backupBtn').addEventListener('click', downloadBackup);
   app.querySelectorAll('[data-tab]').forEach((b) =>
     b.addEventListener('click', () => { tab = b.dataset.tab; render(); })
   );
@@ -144,8 +167,15 @@ async function renderShiftsTab() {
 
   const totalEarned = shiftsCache.reduce((sum, s) => sum + (s.earned_amount || 0), 0);
   const totalMinutes = shiftsCache.reduce((sum, s) => sum + (s.worked_minutes || 0), 0);
+  const staleShifts = shiftsCache.filter((s) => s.needs_attention);
 
   el.innerHTML = `
+    ${staleShifts.length ? `
+      <div class="msg error" style="margin-bottom: 12px;">
+        ⚠ ${staleShifts.length} shift${staleShifts.length > 1 ? 's have' : ' has'} been open a long time and may have been forgotten:
+        ${staleShifts.map((s) => `${s.employee_name} (${s.open_hours}h)`).join(', ')}
+      </div>
+    ` : ''}
     <div class="toolbar">
       <div class="field"><label>Employee</label>
         <select id="fEmployee"><option value="">All</option>${empOptions}</select>
@@ -207,7 +237,9 @@ function renderShiftsRows() {
       <td>
         ${(s.opening_checklist || s.closing_checklist) ? `<button class="btn-sm btn-ghost" data-checklist-view="${s.id}">Open: ${checklistSummary(s.opening_checklist)} · Close: ${checklistSummary(s.closing_checklist)}</button>` : '—'}
       </td>
-      <td>${s.status === 'open' ? 'Open' : 'Closed'}</td>
+      <td>${s.status === 'open'
+        ? (s.needs_attention ? `<span style="color:#fca5a5;">⚠ Open ${s.open_hours}h</span>` : 'Open')
+        : 'Closed'}</td>
       <td>${s.edited_by_admin ? 'yes' : ''}</td>
       <td>
         <button class="btn-sm btn-ghost" data-edit="${s.id}">✎</button>
